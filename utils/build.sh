@@ -18,4 +18,4 @@ CFLAGS="$CFLAGS -fprofile-use -fno-peel-loops -fno-tracer" LDFLAGS="$LDFLAGS -lg
 
 make clean
 
-rm src/sources/*.gcda
+rm sources/*.gcda
