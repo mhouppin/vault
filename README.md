@@ -17,13 +17,15 @@ The repository consists of the following files:
   * src, the directory containing all the source code + a Makefile that can be
     used to compile Vault on Unix-like systems (or Windows if you installed
     MinGW). Note that Git LFS is needed for downloading the network from CLI.
+  * utils/build.sh, a script that facilitates compilation and network updates.
+    This is the easiest way to get fast PGO builds for now.
 
 ## UCI Parameters
 
 Vault supports for now all these UCI options:
 
   * #### EvalFile
-    Indicates the path of the neural network to use (defaults to <empty>, which
+    Indicates the path of the neural network to use (defaults to `<empty>`, which
     falls back on using the HCE).
 
   * #### Threads
