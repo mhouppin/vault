@@ -331,6 +331,8 @@ void add_colored_entry(color_t winningSide, char *wpieces, char *bpieces, endgam
     board_t board;
     boardstack_t stack;
 
+    board.acc = NULL;
+
     set_board(&board, fen, false, &stack);
 
     endgame_entry_t *entry = &EndgameTable[board.stack->materialKey & (EGTB_SIZE - 1)];

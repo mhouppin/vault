@@ -83,7 +83,6 @@ void set_board(board_t *board, char *fen, bool isChess960, boardstack_t *bstack)
 void set_boardstack(board_t *board, boardstack_t *stack);
 void set_castling(board_t *board, color_t color, square_t rookSquare);
 void set_check(board_t *board, boardstack_t *stack);
-void set_board_acc(board_t *board);
 bitboard_t slider_blockers(const board_t *board, bitboard_t sliders, square_t square,
     bitboard_t *pinners);
 void undo_castling(board_t *board, color_t us, square_t kingFrom,
@@ -226,17 +225,14 @@ INLINED void put_piece(board_t *board, piece_t piece, square_t square)
     board->pieceCount[create_piece(c, ALL_PIECES)]++;
     board->psqScorePair += PsqScore[piece][square];
 
-    if (board->acc)
-    {
-        extern Network NN;
+    extern Network NN;
 
-        int whitePov = 368 * c;
-        int blackPov = whitePov ^ 368;
-        int index = acc_base_index(pt, relative_sq(square, c));
+    int whitePov = 368 * c;
+    int blackPov = whitePov ^ 368;
+    int index = acc_base_index(pt, relative_sq(square, c));
 
-        acc_increment(&NN, board->acc, index + whitePov);
-        acc_increment(&NN, board->acc + NN.layerSizes[1], index + blackPov);
-    }
+    acc_increment(&NN, board->acc, index + whitePov);
+    acc_increment(&NN, board->acc + NN.layerSizes[1], index + blackPov);
 }
 
 INLINED void move_piece(board_t *board, square_t from, square_t to)
@@ -253,20 +249,17 @@ INLINED void move_piece(board_t *board, square_t from, square_t to)
     board->table[to] = piece;
     board->psqScorePair += PsqScore[piece][to] - PsqScore[piece][from];
 
-    if (board->acc)
-    {
-        extern Network NN;
+    extern Network NN;
 
-        int whitePov = 368 * c;
-        int blackPov = whitePov ^ 368;
-        int fromIndex = acc_base_index(pt, relative_sq(from, c));
-        int toIndex = acc_base_index(pt, relative_sq(to, c));
+    int whitePov = 368 * c;
+    int blackPov = whitePov ^ 368;
+    int fromIndex = acc_base_index(pt, relative_sq(from, c));
+    int toIndex = acc_base_index(pt, relative_sq(to, c));
 
-        acc_increment(&NN, board->acc, toIndex + whitePov);
-        acc_increment(&NN, board->acc + NN.layerSizes[1], toIndex + blackPov);
-        acc_decrement(&NN, board->acc, fromIndex + whitePov);
-        acc_decrement(&NN, board->acc + NN.layerSizes[1], fromIndex + blackPov);
-    }
+    acc_increment(&NN, board->acc, toIndex + whitePov);
+    acc_increment(&NN, board->acc + NN.layerSizes[1], toIndex + blackPov);
+    acc_decrement(&NN, board->acc, fromIndex + whitePov);
+    acc_decrement(&NN, board->acc + NN.layerSizes[1], fromIndex + blackPov);
 }
 
 INLINED void remove_piece(board_t *board, square_t square)
@@ -283,17 +276,14 @@ INLINED void remove_piece(board_t *board, square_t square)
     board->pieceCount[create_piece(c, ALL_PIECES)]--;
     board->psqScorePair -= PsqScore[piece][square];
 
-    if (board->acc)
-    {
-        extern Network NN;
+    extern Network NN;
 
-        int whitePov = 368 * c;
-        int blackPov = whitePov ^ 368;
-        int index = acc_base_index(pt, relative_sq(square, c));
+    int whitePov = 368 * c;
+    int blackPov = whitePov ^ 368;
+    int index = acc_base_index(pt, relative_sq(square, c));
 
-        acc_decrement(&NN, board->acc, index + whitePov);
-        acc_decrement(&NN, board->acc + NN.layerSizes[1], index + blackPov);
-    }
+    acc_decrement(&NN, board->acc, index + whitePov);
+    acc_decrement(&NN, board->acc + NN.layerSizes[1], index + blackPov);
 }
 
 INLINED void do_move(board_t *board, move_t move, boardstack_t *stack)

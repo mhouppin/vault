@@ -93,10 +93,20 @@ void set_board(board_t *board, char *fen, bool isChess960, boardstack_t *bstack)
     char *fenRule50 = get_next_token(&ptr);
     char *fenTurn = get_next_token(&ptr);
 
+    free(board->acc);
     memset(board, 0, sizeof(board_t));
     memset(bstack, 0, sizeof(boardstack_t));
 
     board->stack = bstack;
+
+    extern Network NN;
+    board->acc = calloc(NN.layerSizes[1] * 2, sizeof(weight_t));
+
+    if (board->acc == NULL)
+    {
+        perror("Unable to allocate board accumulator");
+        exit(EXIT_FAILURE);
+    }
 
     // Scans the piece section of the FEN.
 
@@ -179,7 +189,6 @@ void set_board(board_t *board, char *fen, bool isChess960, boardstack_t *bstack)
     board->chess960 = isChess960;
 
     set_boardstack(board, board->stack);
-    set_board_acc(board);
 }
 
 void set_boardstack(board_t *board, boardstack_t *stack)
@@ -258,46 +267,6 @@ void set_check(board_t *board, boardstack_t *stack)
     stack->checkSquares[ROOK] = rook_moves(board, kingSquare);
     stack->checkSquares[QUEEN] = stack->checkSquares[BISHOP] | stack->checkSquares[ROOK];
     stack->checkSquares[KING] = 0;
-}
-
-void set_board_acc(board_t *board)
-{
-    extern Network NN;
-
-    free(board->acc);
-
-    if (NN.layers)
-    {
-        board->acc = malloc(sizeof(weight_t) * NN.layerSizes[1] * 2);
-
-        if (board->acc == NULL)
-        {
-            perror("Unable to allocate board accumulator");
-            exit(EXIT_FAILURE);
-        }
-
-        acc_reset(&NN, board->acc);
-        acc_reset(&NN, board->acc + NN.layerSizes[1]);
-
-        for (bitboard_t b = occupancy_bb(board); b; )
-        {
-            square_t square = bb_pop_first_sq(&b);
-            piece_t piece = piece_on(board, square);
-            piecetype_t pt = piece_type(piece);
-            color_t c = piece_color(piece);
-
-            square = relative_sq(square, c);
-
-            int whitePov = 368 * c;
-            int blackPov = whitePov ^ 368;
-            int index = acc_base_index(pt, square);
-
-            acc_increment(&NN, board->acc, index + whitePov);
-            acc_increment(&NN, board->acc + NN.layerSizes[1], index + blackPov);
-        }
-    }
-    else
-        board->acc = NULL;
 }
 
 boardstack_t *dup_boardstack(const boardstack_t *stack)

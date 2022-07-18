@@ -207,12 +207,22 @@ void wpool_start_search(worker_pool_t *wpool, const board_t *rootBoard,
     for (size_t i = 0; i < wpool->size; ++i)
     {
         worker_t *curWorker = wpool->workerList[i];
+        extern Network NN;
 
         curWorker->nodes = 0;
         curWorker->board = *rootBoard;
         curWorker->stack = curWorker->board.stack = dup_boardstack(rootBoard->stack);
-        curWorker->board.acc = NULL;
-        set_board_acc(&curWorker->board);
+
+        curWorker->board.acc = malloc(sizeof(weight_t) * NN.layerSizes[1] * 2);
+
+        if (curWorker->board.acc == NULL)
+        {
+            perror("Unable to allocate board accumulator");
+            exit(EXIT_FAILURE);
+        }
+
+        memcpy(curWorker->board.acc, rootBoard->acc, sizeof(weight_t) * NN.layerSizes[1] * 2);
+
         curWorker->board.worker = curWorker;
         curWorker->rootCount = movelist_size(&SearchMoves);
         curWorker->rootMoves = malloc(sizeof(root_move_t) * curWorker->rootCount);

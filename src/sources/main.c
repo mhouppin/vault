@@ -24,7 +24,6 @@
 #include "option.h"
 #include "timeman.h"
 #include "tt.h"
-#include "tuner.h"
 #include "uci.h"
 #include "worker.h"
 
@@ -42,29 +41,68 @@ ucioptions_t Options = {
 
 Network NN = {};
 
+char *Selfdir = NULL;
+char *Basedir = NULL;
+
 timeman_t Timeman;
 
 const char *Delimiters = " \r\t\n";
 
 int main(int argc, char **argv)
 {
+    if (nn_create(&NN, 1, (size_t[]){736, 1}, (int[]){Identity}))
+    {
+        perror("Unable to create network");
+        return (1);
+    }
+
+#if defined(_WIN32) || defined (_WIN64)
+    char folderSep = '\\';
+#else
+    char folderSep = '/';
+#endif
+
+    Basedir = malloc(3);
+
+    if (Basedir == NULL)
+    {
+        perror("Unable to allocate memory for folder string");
+        return (1);
+    }
+
+    Basedir[0] = '.';
+    Basedir[1] = folderSep;
+    Basedir[2] = '\0';
+
+    char *lastFolderSep = strrchr(*argv, folderSep);
+
+    if (lastFolderSep == NULL)
+        Selfdir = strdup(Basedir);
+    else
+    {
+        size_t len = (size_t)(lastFolderSep - *argv + 1);
+
+        Selfdir = malloc(len + 1);
+
+        if (Selfdir != NULL)
+        {
+            memcpy(Selfdir, *argv, len);
+            Selfdir[len] = '\0';
+        }
+    }
+
+    if (Selfdir == NULL)
+    {
+        perror("Unable to allocate memory for folder string");
+        return (1);
+    }
+
     bitboard_init();
     psq_score_init();
     zobrist_init();
     cyclic_init();
     init_kpk_bitbase();
     init_endgame_table();
-
-#ifdef TUNE
-
-    if (argc != 2)
-    {
-        printf("Usage: %s dataset_file\n", *argv);
-        return (0);
-    }
-    start_tuning_session(argv[1]);
-
-#else
 
     tt_resize(16);
     init_reduction_table();
@@ -77,8 +115,6 @@ int main(int argc, char **argv)
     worker_wait_search_end(wpool_main_worker(&WPool));
     uci_loop(argc, argv);
     wpool_init(&WPool, 0);
-
-#endif
 
     return (0);
 }

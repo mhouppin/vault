@@ -17,6 +17,8 @@
 */
 
 #include <ctype.h>
+#include <dirent.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,7 +30,7 @@
 #include "types.h"
 #include "uci.h"
 
-#define UCI_VERSION "v0.3.0"
+#define UCI_VERSION "v0.4.0"
 
 const cmdlink_t commands[] =
 {
@@ -490,14 +492,65 @@ void on_thread_set(void *data)
     fflush(stdout);
 }
 
-void on_network_set(void *data)
+int find_network(const char *path)
 {
-    char *networkFile = *(char **)data;
+    DIR *dir = opendir(path);
 
-    if (strcmp(networkFile, "<empty>"))
+    if (dir == NULL)
+    {
+        printf("info string unable to search network in folder '%s': %s\n",
+            path, strerror(errno));
+        return 0;
+    }
+
+    int found = 0;
+    struct dirent *entry;
+
+    while ((entry = readdir(dir)) != NULL)
     {
         extern Network NN;
 
+        if (!nn_load(&NN, entry->d_name))
+        {
+            printf("info string successfully loaded network '%s%s'\n", path, entry->d_name);
+            printf("info string dimensions");
+            for (size_t i = 0; i < NN.layers + 1; ++i)
+                printf(" %lu", (unsigned long)NN.layerSizes[i]);
+            printf("\n");
+            fflush(stdout);
+            nn_set_layer_activation(&NN, NN.layers - 1, Identity);
+
+            found = 1;
+            break ;
+        }
+    }
+
+    closedir(dir);
+    return (found);
+}
+
+void on_network_set(void *data)
+{
+    char *networkFile = *(char **)data;
+    extern Network NN;
+
+    if (!strcmp(networkFile, "<autodiscover>"))
+    {
+        extern char *Selfdir, *Basedir;
+
+        if (!find_network(Selfdir) && !find_network(Basedir))
+        {
+            printf("info string no network autodiscovered\n");
+
+            if (nn_create(&NN, 1, (size_t[]){736, 1}, (int[]){Identity}))
+            {
+                perror("Unable to create network");
+                exit(EXIT_FAILURE);
+            }
+        }
+    }
+    else
+    {
         if (!nn_load(&NN, networkFile))
         {
             printf("info string successfully loaded network %s\n", networkFile);
@@ -507,14 +560,24 @@ void on_network_set(void *data)
             printf("\n");
             fflush(stdout);
             nn_set_layer_activation(&NN, NN.layers - 1, Identity);
-            set_board_acc(&Board);
+        }
+        else
+        {
+            printf("info string failed to load network %s\n", networkFile);
+
+            if (nn_create(&NN, 1, (size_t[]){736, 1}, (int[]){Identity}))
+            {
+                perror("Unable to create network");
+                exit(EXIT_FAILURE);
+            }
         }
     }
 }
 
 void uci_loop(int argc, char **argv)
 {
-    Options.networkFile = strdup("<empty>");
+    Options.networkFile = strdup("<autodiscover>");
+    on_network_set(&Options.networkFile);
 
     init_option_list(&OptionList);
     add_option_spin_int(&OptionList, "Threads", &Options.threads, 1, 256, &on_thread_set);
