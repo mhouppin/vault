@@ -26,6 +26,8 @@ CFLAGS += -Wall -Wextra -Wcast-qual -Wshadow -Werror -O3 -flto
 CPPFLAGS += -MMD -I include
 LDFLAGS += -lpthread -lm
 
+ARCH_CFLAGS :=
+
 # If no arch is specified, we select a prefetch+popcnt build by default.
 # If you want to build on a different architecture, please specify it in the
 # command with ARCH=something. If you want to disable all arch-specific
@@ -43,33 +45,72 @@ else
 	EXE = vault
 endif
 
-# Enable use of PREFETCH instruction
+ifeq ($(findstring -32,$(ARCH)),-32)
+	ARCH_CFLAGS += -m32
+else
+	ARCH_CFLAGS += -m64
+endif
 
-ifeq ($(ARCH),x86-64)
+ifeq ($(findstring x86-32,$(ARCH)),x86-32)
+	ARCH_CFLAGS += -mmmx
+endif
+
+ifeq ($(findstring x86-64,$(ARCH)),x86-64)
     CFLAGS += -DUSE_PREFETCH
-    ifneq ($(native),yes)
-        CFLAGS += -msse
-    endif
+	ARCH_CFLAGS += -msse -msse2
 endif
 
-ifeq ($(ARCH),x86-64-modern)
-    CFLAGS += -DUSE_PREFETCH -DUSE_POPCNT
-    ifneq ($(native),yes)
-        CFLAGS += -msse -msse3 -mpopcnt
-    endif
+ifeq ($(findstring -sse,$(ARCH)),-sse)
+	ARCH_CFLAGS += -msse
 endif
 
-ifeq ($(ARCH),x86-64-bmi2)
-    CFLAGS += -DUSE_PREFETCH -DUSE_POPCNT -DUSE_PEXT
-    ifneq ($(native),yes)
-        CFLAGS += -msse -msse3 -mpopcnt -msse4 -mbmi2
-    endif
+ifeq ($(findstring -popcnt,$(ARCH)),-popcnt)
+	CFLAGS += -DUSE_POPCNT
+	ARCH_CFLAGS += -msse3 -mpopcnt
+endif
+
+ifeq ($(findstring -mmx,$(ARCH)),-mmx)
+	ARCH_CFLAGS += -mmmx
+endif
+
+ifeq ($(findstring -sse2,$(ARCH)),-sse2)
+	ARCH_CFLAGS += -msse -msse2
+endif
+
+ifeq ($(findstring -ssse3,$(ARCH)),-ssse3)
+	ARCH_CFLAGS += -msse -msse2 -mssse3
+endif
+
+ifeq ($(findstring -sse41,$(ARCH)),-sse41)
+	ARCH_CFLAGS += -msse -msse2 -mssse3 -msse4.1
+endif
+
+ifeq ($(findstring -modern,$(ARCH)),-modern)
+	CFLAGS += -DUSE_POPCNT
+	ARCH_CFLAGS += -mpopcnt -msse -msse2 -msse3 -mssse3 -msse4.1
+endif
+
+ifeq ($(findstring -avx2,$(ARCH)),-avx2)
+	CFLAGS += -DUSE_POPCNT
+	ARCH_CFLAGS += -mpopcnt -msse -msse2 -msse3 -mssse3 -msse4.1 -mavx2
+endif
+
+ifeq ($(findstring -bmi2,$(ARCH)),-bmi2)
+	CFLAGS += -DUSE_POPCNT -DUSE_PEXT
+	ARCH_CFLAGS += -mpopcnt -msse -msse2 -msse3 -mssse3 -msse4.1 -mavx2 -mbmi2
+endif
+
+ifeq ($(findstring -avx512,$(ARCH)),-avx512)
+	CFLAGS += -DUSE_POPCNT -DUSE_PEXT
+	ARCH_CFLAGS += -mpopcnt -msse -msse2 -msse3 -mssse3 -msse4.1 -mavx2 -mavx512f -mavx512bw -mbmi2
 endif
 
 # If native is specified, build will try to use all available CPU instructions
 
 ifeq ($(native),yes)
     CFLAGS += -march=native
+else
+	CFLAGS += $(ARCH_CFLAGS)
 endif
 
 all: $(EXE)
