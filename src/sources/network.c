@@ -121,7 +121,7 @@ int nn_create(Network *nn, size_t layers, const size_t layerSizes[], int activat
     {
         if (activationIds[i] > ACTIVATION_COUNT || activationIds[i] < 0)
         {
-            fprintf(stderr, "nn_create(): Activation id %d doesn't exist\n", nn->activationIds[i]);
+            fprintf(stderr, "nn_create(): Activation id %d doesn't exist\n", activationIds[i]);
             goto create_error;
         }
         nn->activationIds[i] = activationIds[i];
