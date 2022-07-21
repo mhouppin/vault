@@ -30,7 +30,7 @@
 #include "types.h"
 #include "uci.h"
 
-#define UCI_VERSION "v0.4.0"
+#define UCI_VERSION "v0.4.1"
 
 const cmdlink_t commands[] =
 {
@@ -509,6 +509,14 @@ int find_network(const char *path)
     while ((entry = readdir(dir)) != NULL)
     {
         extern Network NN;
+        char *lastDot = strrchr(entry->d_name, '.');
+
+        if (lastDot == NULL)
+            continue ;
+
+        // Check the file extension before trying to autoload it
+        if (strcmp(lastDot, ".nn"))
+            continue ;
 
         if (!nn_load(&NN, entry->d_name))
         {
