@@ -320,6 +320,17 @@ void uci_genfens(Uci *uci __attribute__((unused)), StringView args) {
 
     token = strview_next_word(&args);
 
+    if (!strview_equals_strview(token, STATIC_STRVIEW("book"))) {
+        info_debug(
+            "info string Error: expected command 'book', got '%.*s'\n",
+            (int)token.size,
+            (const char *)token.data
+        );
+        return;
+    }
+
+    token = strview_next_word(&args);
+
     if (!strview_equals_strview(token, STATIC_STRVIEW("None"))) {
         info_debug(
             "info string Error: expected book 'None', got '%.*s'\n",
