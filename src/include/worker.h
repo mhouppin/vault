@@ -1,123 +1,197 @@
+/*
+**    Stash, a UCI chess playing engine developed from scratch
+**    Copyright (C) 2019-2025 Morgan Houppin
+**
+**    Stash is free software: you can redistribute it and/or modify
+**    it under the terms of the GNU General Public License as published by
+**    the Free Software Foundation, either version 3 of the License, or
+**    (at your option) any later version.
+**
+**    Stash is distributed in the hope that it will be useful,
+**    but WITHOUT ANY WARRANTY; without even the implied warranty of
+**    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+**    GNU General Public License for more details.
+**
+**    You should have received a copy of the GNU General Public License
+**    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 #ifndef WORKER_H
 #define WORKER_H
 
 #include <pthread.h>
+#include <stdatomic.h>
+
 #include "board.h"
 #include "history.h"
-#include "pawns.h"
-#include "uci.h"
+#include "network.h"
+#include "search_params.h"
+#include "timeman.h"
+#include "tt.h"
 
-// Struct for search params.
+// Early declaration required for the worker struct
+struct WorkerPool;
 
-typedef struct goparams_s
-{
-    clock_t wtime;
-    clock_t btime;
-    clock_t winc;
-    clock_t binc;
-    int movestogo;
-    int depth;
-    size_t nodes;
-    int mate;
-    int infinite;
-    int perft;
-    int ponder;
-    clock_t movetime;
-}
-goparams_t;
+// Struct for PV lines
+typedef struct {
+    Move moves[MAX_MOVES];
+    u16 length;
+} PvLine;
 
-extern goparams_t SearchParams;
+// Initializes the PV line struct
+void pv_line_init(PvLine *pv_line);
 
-// Struct for root moves.
+// Initializes the PV line struct with the given move
+void pv_line_init_move(PvLine *pv_line, Move move);
 
-typedef struct root_move_s
-{
-    move_t  move;
-    int seldepth;
-    score_t prevScore;
-    score_t score;
-    move_t  pv[512];
-}
-root_move_t;
+// Updates the PV line by concatenating a move and another PV line
+void pv_line_update(PvLine *restrict pv_line, Move bestmove, const PvLine *restrict next);
 
-void sort_root_moves(root_move_t *begin, root_move_t *end);
-root_move_t *find_root_move(root_move_t *begin, root_move_t *end, move_t move);
-void print_pv(const board_t *board, root_move_t *rootMove, int multiPv,
-    int depth, clock_t time, int bound);
+// Struct for root moves
+typedef struct {
+    Move move;
+    u16 seldepth;
+    Score previous_score;
+    Score score;
+    PvLine pv;
+} RootMove;
 
-// Struct for worker thread data.
+// Initializes the root move struct
+void root_move_init(RootMove *root_move, Move move);
 
-typedef struct worker_s
-{
-    board_t board;
-    boardstack_t *stack;
-    butterfly_history_t bfHistory;
-    continuation_history_t ctHistory;
-    countermove_history_t cmHistory;
-    capture_history_t capHistory;
-    pawn_entry_t *pawnTable;
+// Locates a move in the root move array
+RootMove *find_root_move(RootMove *root_moves, usize root_count, Move move);
 
-    int seldepth;
-    int verifPlies;
-    _Atomic uint64_t nodes;
+// Sorts root moves based on their score
+void sort_root_moves(RootMove *root_moves, usize root_count);
 
-    root_move_t *rootMoves;
-    size_t rootCount;
-    int pvLine;
+// Struct for worker thread data
+typedef struct {
+    Board board;
+    AccumulatorPair *acc_stack;
+    struct WorkerPool *pool;
+    ButterflyHistory *butterfly_hist;
+    ContinuationHistory *continuation_hist;
+    CountermoveHistory *counter_hist;
+    CaptureHistory *capture_hist;
+    CorrectionHistory *pawn_corrhist;
+    CorrectionHistory *nonpawn_corrhist;
 
-    size_t idx;
+    u16 seldepth;
+    u16 root_depth;
+    i16 nmp_verif_plies;
+    _Atomic u64 nodes;
+
+    RootMove *root_moves;
+    usize root_move_count;
+    u16 pv_line;
+
+    usize thread_index;
     pthread_t thread;
     pthread_mutex_t mutex;
-    pthread_cond_t condVar;
-    bool exit;
-    bool searching;
-}
-worker_t;
+    pthread_cond_t condvar;
+    bool must_exit;
+    bool is_searching;
+} Worker;
 
-INLINED worker_t *get_worker(const board_t *board)
-{
-    return (board->worker);
-}
-
-INLINED score_t draw_score(const worker_t *worker)
-{
-    return (worker->nodes & 2) - 1;
+// Returns the worker struct associated with the given board
+INLINED Worker *board_get_worker(const Board *board) {
+    assert(board->has_worker);
+    return (Worker *)((uintptr_t)board - offsetof(Worker, board));
 }
 
-void worker_init(worker_t *worker, size_t idx);
-void worker_destroy(worker_t *worker);
-void worker_search(worker_t *worker);
-void main_worker_search(worker_t *worker);
-void worker_reset(worker_t *worker);
-void worker_start_search(worker_t *worker);
-void worker_wait_search_end(worker_t *worker);
-void *worker_entry(void *worker);
-
-typedef struct worker_pool_s
-{
-    size_t size;
-    int checks;
-
-    _Atomic bool ponder;
-    _Atomic bool stop;
-
-    worker_t **workerList;
-}
-worker_pool_t;
-
-extern worker_pool_t WPool;
-
-INLINED worker_t *wpool_main_worker(worker_pool_t *wpool)
-{
-    return wpool->workerList[0];
+// Tells the board that it has a worker associated to it
+INLINED void board_enable_worker(Board *board) {
+    board->has_worker = true;
 }
 
-void wpool_init(worker_pool_t *wpool, size_t threads);
-void wpool_reset(worker_pool_t *wpool);
-void wpool_start_search(worker_pool_t *wpool, const board_t *rootBoard,
-    const goparams_t *searchParams);
-void wpool_start_workers(worker_pool_t *wpool);
-void wpool_wait_search_end(worker_pool_t *wpool);
-uint64_t wpool_get_total_nodes(worker_pool_t *wpool);
+// Returns a pseudo-random draw score using the current node count
+INLINED Score worker_draw_score(const Worker *worker) {
+    return (Score)(atomic_load_explicit(&worker->nodes, memory_order_relaxed) & 2) - 1;
+}
+
+INLINED void worker_increment_nodes(Worker *worker) {
+    atomic_fetch_add_explicit(&worker->nodes, 1, memory_order_relaxed);
+}
+
+// Initializes the worker
+void worker_init(Worker *worker, usize thread_index, struct WorkerPool *wpool);
+
+// Frees all memory associated with the worker
+void worker_destroy(Worker *worker);
+
+// Resets the worker at the start of a new game
+void worker_init_new_game(Worker *worker);
+
+// Asks the worker to start searching
+void worker_start_searching(Worker *worker);
+
+// Helper for the worker to set up its own search state
+void worker_init_search_data(Worker *worker);
+
+// Waits for the worker to complete its search
+void worker_wait_search_completion(Worker *worker);
+
+// Entry point for the worker thread main loop
+void *worker_entry_point(void *worker_ptr);
+
+typedef struct WorkerPool {
+    pthread_attr_t worker_pthread_attr;
+    usize worker_count;
+    Worker **worker_list;
+
+    Board root_board;
+    SearchParams search_params;
+    TranspositionTable tt;
+    Timeman timeman;
+
+    u64 check_nodes;
+    atomic_bool ponder;
+    atomic_bool stop;
+} WorkerPool;
+
+INLINED Worker *wpool_main_worker(WorkerPool *wpool) {
+    return wpool->worker_list[0];
+}
+
+INLINED void wpool_ponderhit(WorkerPool *wpool) {
+    atomic_store_explicit(&wpool->ponder, false, memory_order_relaxed);
+}
+
+INLINED bool wpool_is_pondering(const WorkerPool *wpool) {
+    return atomic_load_explicit(&wpool->ponder, memory_order_relaxed);
+}
+
+INLINED void wpool_stop(WorkerPool *wpool) {
+    atomic_store_explicit(&wpool->stop, true, memory_order_relaxed);
+}
+
+INLINED bool wpool_is_stopped(const WorkerPool *wpool) {
+    return atomic_load_explicit(&wpool->stop, memory_order_relaxed);
+}
+
+// These functions can be called from the UCI thread.
+
+void wpool_init(WorkerPool *wpool);
+void wpool_resize(WorkerPool *wpool, usize worker_count);
+void wpool_destroy(WorkerPool *wpool);
+void wpool_init_new_game(WorkerPool *wpool);
+void wpool_start_search(
+    WorkerPool *wpool,
+    const Board *root_board,
+    const SearchParams *search_params
+);
+void wpool_wait_search_completion(WorkerPool *wpool);
+
+// These functions can be called from the main thread.
+
+void wpool_init_new_search(WorkerPool *wpool);
+void wpool_start_aux_workers(WorkerPool *wpool);
+void wpool_wait_aux_workers(WorkerPool *wpool);
+void wpool_check_time(WorkerPool *wpool);
+
+// These functions can be called from any thread.
+
+u64 wpool_get_total_nodes(WorkerPool *wpool);
 
 #endif

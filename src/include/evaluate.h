@@ -16,20 +16,18 @@
 **    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#ifndef RANDOM_H
-#define RANDOM_H
+#ifndef EVALUATE_H
+#define EVALUATE_H
 
-#include "core.h"
+#include "board.h"
+#include "network.h"
 
-// Generates a random 64-bit unsigned integer
-INLINED u64 u64_random(u64 *seed) {
-    u64 x = *seed;
+Score evaluate(const Board *restrict board, AccumulatorPair *restrict acc_pair);
 
-    x ^= x >> 12;
-    x ^= x << 25;
-    x ^= x >> 27;
-    *seed = x;
-    return x * U64(0x2545F4914F6CDD1D);
-}
+Score evaluate_noacc(const Board *board);
+
+Score nn_evaluate(const Board *restrict board, const Network *restrict network, AccumulatorPair *restrict acc_pair);
+
+Score nn_evaluate_noacc(const Board *board, const Network *network);
 
 #endif

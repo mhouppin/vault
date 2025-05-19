@@ -20,13 +20,20 @@ SOURCES := $(wildcard sources/*.c)
 
 OBJECTS := $(SOURCES:%.c=%.o)
 DEPENDS := $(SOURCES:%.c=%.d)
-native = yes
 
-CFLAGS += -Wall -Wextra -Wcast-qual -Wshadow -Werror -O3 -flto
-CPPFLAGS += -MMD -I include
-LDFLAGS += -lpthread -lm
+ARCH ?=
+NATIVE ?= yes
+CFLAGS ?= -O3 -flto -DNDEBUG
+CPPFLAGS ?= -Werror
+LDFLAGS ?=
 
-ARCH_CFLAGS :=
+user_CFLAGS := $(CFLAGS)
+user_CPPFLAGS := $(CPPFLAGS)
+user_LDFLAGS := $(LDFLAGS)
+
+own_CFLAGS := -std=gnu11
+own_CPPFLAGS := -Wall -Wextra -Wcast-qual -Wshadow -Wvla -MMD -I include
+own_LDFLAGS := -lpthread -lm
 
 # If no arch is specified, we select a prefetch+popcnt build by default.
 # If you want to build on a different architecture, please specify it in the
@@ -34,13 +41,14 @@ ARCH_CFLAGS :=
 # optimizations, use ARCH=unknown.
 
 ifeq ($(ARCH),)
-	ARCH=x86-64-modern
+	ARCH=x86-64-popcnt
 endif
 
 # Add .exe to the executable name if we are on Windows
 
 ifeq ($(OS),Windows_NT)
 	EXE = vault.exe
+	own_LDFLAGS += -static
 else
 	EXE = vault
 endif
@@ -56,7 +64,6 @@ ifeq ($(findstring x86-32,$(ARCH)),x86-32)
 endif
 
 ifeq ($(findstring x86-64,$(ARCH)),x86-64)
-    CFLAGS += -DUSE_PREFETCH
 	ARCH_CFLAGS += -msse -msse2
 endif
 
@@ -65,7 +72,6 @@ ifeq ($(findstring -sse,$(ARCH)),-sse)
 endif
 
 ifeq ($(findstring -popcnt,$(ARCH)),-popcnt)
-	CFLAGS += -DUSE_POPCNT
 	ARCH_CFLAGS += -msse3 -mpopcnt
 endif
 
@@ -86,32 +92,34 @@ ifeq ($(findstring -sse41,$(ARCH)),-sse41)
 endif
 
 ifeq ($(findstring -modern,$(ARCH)),-modern)
-	CFLAGS += -DUSE_POPCNT
 	ARCH_CFLAGS += -mpopcnt -msse -msse2 -msse3 -mssse3 -msse4.1
 endif
 
 ifeq ($(findstring -avx2,$(ARCH)),-avx2)
-	CFLAGS += -DUSE_POPCNT
 	ARCH_CFLAGS += -mpopcnt -msse -msse2 -msse3 -mssse3 -msse4.1 -mavx2
 endif
 
 ifeq ($(findstring -bmi2,$(ARCH)),-bmi2)
-	CFLAGS += -DUSE_POPCNT -DUSE_PEXT
+	own_CFLAGS += -DUSE_PEXT
 	ARCH_CFLAGS += -mpopcnt -msse -msse2 -msse3 -mssse3 -msse4.1 -mavx2 -mbmi2
 endif
 
 ifeq ($(findstring -avx512,$(ARCH)),-avx512)
-	CFLAGS += -DUSE_POPCNT -DUSE_PEXT
+	own_CFLAGS += -DUSE_PEXT
 	ARCH_CFLAGS += -mpopcnt -msse -msse2 -msse3 -mssse3 -msse4.1 -mavx2 -mavx512f -mavx512bw -mbmi2
 endif
 
 # If native is specified, build will try to use all available CPU instructions
 
-ifeq ($(native),yes)
-    CFLAGS += -march=native
+ifeq ($(NATIVE),yes)
+    own_CFLAGS += -march=native
 else
-	CFLAGS += $(ARCH_CFLAGS)
+	own_CFLAGS += $(ARCH_CFLAGS)
 endif
+
+override CFLAGS += $(own_CFLAGS)
+override CPPFLAGS += $(own_CPPFLAGS)
+override LDFLAGS += $(own_LDFLAGS)
 
 all: $(EXE)
 
@@ -119,8 +127,8 @@ $(EXE): $(OBJECTS)
 	+$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	@echo ''
 	@echo '    Short notice: native builds are enabled by default on the project.'
-	@echo '    To build more portable binaries, please add `native=no` to your'
-	@echo '    make command (like `make ARCH=x86-64-modern native=no` for example).'
+	@echo '    To build more portable binaries, please add `NATIVE=no` to your'
+	@echo '    make command (like `make ARCH=x86-64-modern NATIVE=no` for example).'
 	@echo ''
 
 -include $(DEPENDS)
@@ -133,6 +141,6 @@ fclean: clean
 
 re:
 	$(MAKE) fclean
-	+$(MAKE) all CFLAGS="$(CFLAGS)" CPPFLAGS="$(CPPFLAGS)" LDFLAGS="$(LDFLAGS)"
+	+$(MAKE) all CFLAGS="$(user_CFLAGS)" CPPFLAGS="$(user_CPPFLAGS)" LDFLAGS="$(user_LDFLAGS)"
 
 .PHONY: all clean fclean re

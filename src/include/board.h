@@ -1,13 +1,13 @@
 /*
-**    Vault, a UCI-compliant chess engine derivating from Stash
-**    Copyright (C) 2019-2022 Morgan Houppin
+**    Stash, a UCI chess playing engine developed from scratch
+**    Copyright (C) 2019-2025 Morgan Houppin
 **
-**    Vault is free software: you can redistribute it and/or modify
+**    Stash is free software: you can redistribute it and/or modify
 **    it under the terms of the GNU General Public License as published by
 **    the Free Software Foundation, either version 3 of the License, or
 **    (at your option) any later version.
 **
-**    Vault is distributed in the hope that it will be useful,
+**    Stash is distributed in the hope that it will be useful,
 **    but WITHOUT ANY WARRANTY; without even the implied warranty of
 **    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 **    GNU General Public License for more details.
@@ -19,276 +19,237 @@
 #ifndef BOARD_H
 #define BOARD_H
 
-#include "accumulator.h"
 #include "bitboard.h"
+#include "chess_types.h"
+#include "core.h"
 #include "hashkey.h"
-#include "psq_score.h"
-#include "types.h"
+#include "strview.h"
 
-typedef struct boardstack_s
-{
-    int castlings;
-    int rule50;
-    int pliesFromNullMove;
-    square_t enPassantSquare;
-    hashkey_t pawnKey;
-    score_t material[COLOR_NB];
-    hashkey_t materialKey;
-    hashkey_t boardKey;
-    bitboard_t checkers;
-    piece_t capturedPiece;
-    struct boardstack_s *prev;
-    bitboard_t kingBlockers[COLOR_NB];
-    bitboard_t pinners[COLOR_NB];
-    bitboard_t checkSquares[PIECETYPE_NB];
-    int repetition;
-}
-boardstack_t;
+// Struct representing the board stack data from past moves
+typedef struct Boardstack {
+    Key board_key;
+    Key king_pawn_key;
+    Key material_key;
+    Key nonpawn_key[COLOR_NB];
+    Bitboard checkers;
+    Bitboard king_blockers[COLOR_NB];
+    Bitboard pinners[COLOR_NB];
+    Bitboard check_squares[PIECETYPE_NB];
+    struct Boardstack *previous;
+    CastlingMask castlings;
+    u16 rule50;
+    i16 repetition;
+    u16 plies_since_nullmove;
+    Square ep_square;
+    Piece captured_piece;
+    u16 feature_add[2];
+    u16 feature_sub[2];
+    Score material[COLOR_NB];
+} Boardstack;
 
-typedef struct board_s
-{
-    piece_t table[SQUARE_NB];
-    bitboard_t piecetypeBB[PIECETYPE_NB];
-    bitboard_t colorBB[COLOR_NB];
-    int pieceCount[PIECE_NB];
-    int castlingMask[SQUARE_NB];
-    square_t castlingRookSquare[CASTLING_NB];
-    bitboard_t castlingPath[CASTLING_NB];
-    int ply;
-    color_t sideToMove;
-    scorepair_t psqScorePair;
-    boardstack_t *stack;
-    void *worker;
-    weight_t *acc;
+// Struct representing the board
+typedef struct {
+    Piece mailbox[SQUARE_NB];
+    Bitboard piecetype_bb[PIECETYPE_NB];
+    Bitboard color_bb[COLOR_NB];
+    u8 piece_count[PIECE_NB];
+    CastlingMask castling_mask[SQUARE_NB];
+    Square castling_rook_square[CASTLING_NB];
+    Bitboard castling_path[CASTLING_NB];
+    Boardstack *stack;
+    u16 ply;
+    Color side_to_move;
+    Scorepair psq_scorepair;
     bool chess960;
-}
-board_t;
+    bool has_worker;
+} Board;
 
-extern board_t Board;
+extern const StringView PieceIndexes;
+extern const StringView StartposStr;
 
+// Initializes cycle detection tables
 void cyclic_init(void);
-bitboard_t attackers_list(const board_t *board, square_t s, bitboard_t occupied);
-void do_castling(board_t *board, color_t us, square_t kingFrom, square_t *kingTo,
-    square_t *rookFrom, square_t *rookTo);
-void do_move_gc(board_t *board, move_t move, boardstack_t *stack, bool givesCheck);
-void do_null_move(board_t *board, boardstack_t *stack);
-const char *board_fen(const board_t *board);
-bool game_is_drawn(const board_t *board, int ply);
-bool game_has_cycle(const board_t *board, int ply);
-bool move_is_legal(const board_t *board, move_t move);
-bool move_is_pseudo_legal(const board_t *board, move_t move);
-bool move_gives_check(const board_t *board, move_t move);
-bool see_greater_than(const board_t *board, move_t move, score_t threshold);
-void set_board(board_t *board, char *fen, bool isChess960, boardstack_t *bstack);
-void set_boardstack(board_t *board, boardstack_t *stack);
-void set_castling(board_t *board, color_t color, square_t rookSquare);
-void set_check(board_t *board, boardstack_t *stack);
-bitboard_t slider_blockers(const board_t *board, bitboard_t sliders, square_t square,
-    bitboard_t *pinners);
-void undo_castling(board_t *board, color_t us, square_t kingFrom,
-    square_t *kingTo, square_t *rookFrom, square_t *rookTo);
-void undo_move(board_t *board, move_t move);
-void undo_null_move(board_t *board);
 
-boardstack_t *dup_boardstack(const boardstack_t *stack);
-void free_boardstack(boardstack_t *stack);
+// Initializes the board stack from the given board
+void boardstack_init(Boardstack *restrict stack, const Board *restrict board);
 
-INLINED piece_t piece_on(const board_t *board, square_t square)
-{
-    return (board->table[square]);
+// Duplicates the board stack (including all the linked sub-stacks)
+Boardstack *boardstack_clone(const Boardstack *stack);
+
+// Frees memory owned by the board stack (including all the linked sub-stacks)
+void boardstack_destroy(Boardstack *stack);
+
+// Initializes the board from the given FEN string. Returns true if the board
+// was correctly initialized, false otherwise.
+bool board_try_init(Board *board, StringView fen, bool is_chess960, Boardstack *stack);
+
+// Clones a board and its stack into another board struct
+void board_clone(Board *restrict board, const Board *restrict other);
+
+// Returns the FEN representation of the board
+StringView board_get_fen(const Board *board);
+
+// Checks if the given move is pseudo-legal
+bool board_move_is_pseudolegal(const Board *board, Move move);
+
+// Checks if the given pseudo-legal move is legal
+bool board_move_is_legal(const Board *board, Move move);
+
+// Checks if the given move gives check
+bool board_move_gives_check(const Board *board, Move move);
+
+// Applies a legal move to the board, using the extra check info for faster execution
+void board_do_move_gc(
+    Board *restrict board,
+    Move move,
+    Boardstack *restrict new_stack,
+    bool gives_check
+);
+
+// Applies a legal move to the board
+INLINED void board_do_move(Board *restrict board, Move move, Boardstack *restrict new_stack) {
+    board_do_move_gc(board, move, new_stack, board_move_gives_check(board, move));
 }
 
-INLINED bool empty_square(const board_t *board, square_t square)
-{
-    return (piece_on(board, square) == NO_PIECE);
+// Applies a null move to the board
+void board_do_null_move(Board *restrict board, Boardstack *restrict new_stack);
+
+// Reverts the given move
+void board_undo_move(Board *board, Move move);
+
+// Reverts a null move
+void board_undo_null_move(Board *board);
+
+// Checks if the game is drawn by 50-move rule or by repetition
+bool board_game_is_drawn(const Board *board, u16 ply);
+
+// Checks if the opponent created a cycle in the tree, or if we can complete a cycle with a move
+bool board_game_contains_cycle(const Board *board, u16 ply);
+
+// Checks if the given move has a Static Exchange Evaluation score greater than or equal to the
+// given threshold
+bool board_see_above(const Board *board, Move move, Score threshold);
+
+// Converts a move to its UCI string representation
+StringView board_move_to_uci(const Board *board, Move move);
+
+// Converts a UCI move representation to our internal move type, or NO_MOVE if no legal move matches
+// the given string
+Move board_uci_to_move(const Board *board, StringView move_strview);
+
+// Returns the piece on the given square
+INLINED Piece board_piece_on(const Board *board, Square square) {
+    assert(square_is_valid(square));
+    return board->mailbox[square];
 }
 
-INLINED piece_t moved_piece(const board_t *board, move_t move)
-{
-    return (piece_on(board, from_sq(move)));
+// Checks if the given square is empty
+INLINED bool board_square_is_empty(const Board *board, Square square) {
+    assert(square_is_valid(square));
+    return board_piece_on(board, square) == NO_PIECE;
 }
 
-INLINED bitboard_t piecetype_bb(const board_t *board, piecetype_t pt)
-{
-    return (board->piecetypeBB[pt]);
+// Returns the piece performing the given move (before the move is actually done)
+INLINED Piece board_moved_piece(const Board *board, Move move) {
+    return board_piece_on(board, move_from(move));
 }
 
-INLINED bitboard_t piecetypes_bb(const board_t *board, piecetype_t pt1, piecetype_t pt2)
-{
-    return (piecetype_bb(board, pt1) | piecetype_bb(board, pt2));
+// Returns a bitboard of all pieces matching the given color
+INLINED Bitboard board_color_bb(const Board *board, Color color) {
+    assert(color_is_valid(color));
+    return board->color_bb[color];
 }
 
-INLINED bitboard_t color_bb(const board_t *board, color_t color)
-{
-    return (board->colorBB[color]);
+// Returns a bitboard of all pieces matching the given piece type
+INLINED Bitboard board_piecetype_bb(const Board *board, Piecetype piecetype) {
+    assert(piecetype_is_valid(piecetype));
+    return board->piecetype_bb[piecetype];
 }
 
-INLINED bitboard_t piece_bb(const board_t *board, color_t color, piecetype_t pt)
-{
-    return (piecetype_bb(board, pt) & color_bb(board, color));
+// Returns a bitboard of all pieces matching the given piece types
+INLINED Bitboard
+    board_piecetypes_bb(const Board *board, Piecetype piecetype1, Piecetype piecetype2) {
+    assert(piecetype_is_valid(piecetype1));
+    assert(piecetype_is_valid(piecetype2));
+    return board_piecetype_bb(board, piecetype1) | board_piecetype_bb(board, piecetype2);
+}
+// Returns a bitboard of all pieces matching the given color and piece type
+INLINED Bitboard board_piece_bb(const Board *board, Color color, Piecetype piecetype) {
+    assert(color_is_valid(color));
+    assert(piecetype_is_valid(piecetype));
+    return board_color_bb(board, color) & board_piecetype_bb(board, piecetype);
 }
 
-INLINED bitboard_t pieces_bb(const board_t *board, color_t color, piecetype_t pt1, piecetype_t pt2)
-{
-    return (piecetypes_bb(board, pt1, pt2) & color_bb(board, color));
+// Returns a bitboard of all pieces matching the given color and piece types
+INLINED Bitboard
+    board_pieces_bb(const Board *board, Color color, Piecetype piecetype1, Piecetype piecetype2) {
+    assert(color_is_valid(color));
+    assert(piecetype_is_valid(piecetype1));
+    assert(piecetype_is_valid(piecetype2));
+    return board_color_bb(board, color) & board_piecetypes_bb(board, piecetype1, piecetype2);
 }
 
-INLINED bitboard_t occupancy_bb(const board_t *board)
-{
-    return (piecetype_bb(board, ALL_PIECES));
+// Returns a bitboard of all pieces
+INLINED Bitboard board_occupancy_bb(const Board *board) {
+    return board_piecetype_bb(board, ALL_PIECES);
 }
 
-INLINED bitboard_t get_king_square(const board_t *board, color_t color)
-{
-    return (bb_first_sq(piece_bb(board, color, KING)));
+// Returns the number of pieces matching the color and piecetype on the board
+INLINED u8 board_piece_count(const Board *board, Piece piece) {
+    assert(piece_is_valid(piece));
+    return board->piece_count[piece];
 }
 
-INLINED bitboard_t king_moves(square_t square)
-{
-    return (PseudoMoves[KING][square]);
+INLINED u8 board_piecetype_count(const Board *board, Piecetype piecetype) {
+    assert(piecetype_is_valid(piecetype));
+    return board_piece_count(board, create_piece(WHITE, piecetype))
+        + board_piece_count(board, create_piece(BLACK, piecetype));
 }
 
-INLINED bitboard_t knight_moves(square_t square)
-{
-    return (PseudoMoves[KNIGHT][square]);
+// Returns the number of pieces matching the color on the board
+INLINED u8 board_color_count(const Board *board, Color color) {
+    assert(color_is_valid(color));
+    return board_piece_count(board, create_piece(color, ALL_PIECES));
 }
 
-INLINED bitboard_t pawn_moves(square_t square, color_t color)
-{
-    return (PawnMoves[color][square]);
+// Returns the number of pieces on the board
+INLINED u8 board_total_piece_count(const Board *board) {
+    return board_color_count(board, WHITE) + board_color_count(board, BLACK);
 }
 
-INLINED bitboard_t bishop_moves(const board_t *board, square_t square)
-{
-    return (bishop_moves_bb(square, occupancy_bb(board)));
+// Returns the king square of the given color
+INLINED Bitboard board_king_square(const Board *board, Color color) {
+    assert(color_is_valid(color));
+    return bb_first_square(board_piece_bb(board, color, KING));
 }
 
-INLINED bitboard_t rook_moves(const board_t *board, square_t square)
-{
-    return (rook_moves_bb(square, occupancy_bb(board)));
+// Checks if the given castling has an obstructed path
+INLINED bool board_castling_is_blocked(const Board *board, CastlingRight castling) {
+    return !!(board_occupancy_bb(board) & board->castling_path[castling]);
 }
 
-INLINED bitboard_t queen_moves(const board_t *board, square_t square)
-{
-    return (bishop_moves(board, square) | rook_moves(board, square));
+// Checks if the given move is a capture or a promotion
+INLINED bool board_move_is_noisy(const Board *board, Move move) {
+    return move_type(move) == NORMAL_MOVE ? !board_square_is_empty(board, move_to(move))
+                                          : move_type(move) != CASTLING;
 }
 
-INLINED bitboard_t piece_moves(piecetype_t piecetype, square_t square, bitboard_t occupied)
-{
-    switch (piecetype)
-    {
-        case KNIGHT: return (knight_moves(square));
-        case BISHOP: return (bishop_moves_bb(square, occupied));
-        case ROOK:   return (rook_moves_bb(square, occupied));
-        case QUEEN:  return (bishop_moves_bb(square, occupied) | rook_moves_bb(square, occupied));
-        case KING:   return (king_moves(square));
-
-        default:
-            __builtin_unreachable();
-            return (0);
-    }
+// Helper function for extracting a zobrist hash of the pawn structure
+INLINED Key board_pawn_key(const Board *board) {
+    return board->stack->king_pawn_key ^ ZobristPsq[WHITE_KING][board_king_square(board, WHITE)]
+        ^ ZobristPsq[BLACK_KING][board_king_square(board, BLACK)];
 }
 
-INLINED bitboard_t attackers_to(const board_t *board, square_t square)
-{
-    return (attackers_list(board, square, occupancy_bb(board)));
+INLINED Key board_nonpawn_key(const Board *board, Color color) {
+    return board->stack->nonpawn_key[color];
 }
 
-INLINED bool castling_blocked(const board_t *board, int castling)
-{
-    return (occupancy_bb(board) & board->castlingPath[castling]);
+// Helper function for grabbing a material count with standardized values: Pawn=1, Knight=Bishop=3,
+// Rook=5, Queen=9
+INLINED u32 board_material_count(const Board *board) {
+    return 9 * board_piecetype_count(board, QUEEN) + 5 * board_piecetype_count(board, ROOK)
+        + 3 * board_piecetype_count(board, BISHOP) + 3 * board_piecetype_count(board, KNIGHT)
+        + board_piecetype_count(board, PAWN);
 }
 
-INLINED bool is_capture_or_promotion(const board_t *board, move_t move)
-{
-    return (move_type(move) == NORMAL_MOVE
-        ? !empty_square(board, to_sq(move))
-        : move_type(move) != CASTLING);
-}
-
-INLINED int acc_base_index(piecetype_t pt, square_t square)
-{
-    return (pt == PAWN ? square - SQ_A2 : square + 48 + (pt - KNIGHT) * SQUARE_NB);
-}
-
-INLINED void put_piece(board_t *board, piece_t piece, square_t square)
-{
-    bitboard_t sqbb = square_bb(square);
-    piecetype_t pt = piece_type(piece);
-    color_t c = piece_color(piece);
-
-    board->table[square] = piece;
-    board->piecetypeBB[ALL_PIECES] |= sqbb;
-    board->piecetypeBB[pt] |= sqbb;
-    board->colorBB[c] |= sqbb;
-    board->pieceCount[piece]++;
-    board->pieceCount[create_piece(c, ALL_PIECES)]++;
-    board->psqScorePair += PsqScore[piece][square];
-
-    extern Network NN;
-
-    int whitePov = 368 * c;
-    int blackPov = whitePov ^ 368;
-    int index = acc_base_index(pt, relative_sq(square, c));
-
-    acc_increment(&NN, board->acc, index + whitePov);
-    acc_increment(&NN, board->acc + NN.layerSizes[1], index + blackPov);
-}
-
-INLINED void move_piece(board_t *board, square_t from, square_t to)
-{
-    piece_t piece = piece_on(board, from);
-    bitboard_t moveBB = square_bb(from) | square_bb(to);
-    piecetype_t pt = piece_type(piece);
-    color_t c = piece_color(piece);
-
-    board->piecetypeBB[ALL_PIECES] ^= moveBB;
-    board->piecetypeBB[pt] ^= moveBB;
-    board->colorBB[c] ^= moveBB;
-    board->table[from] = NO_PIECE;
-    board->table[to] = piece;
-    board->psqScorePair += PsqScore[piece][to] - PsqScore[piece][from];
-
-    extern Network NN;
-
-    int whitePov = 368 * c;
-    int blackPov = whitePov ^ 368;
-    int fromIndex = acc_base_index(pt, relative_sq(from, c));
-    int toIndex = acc_base_index(pt, relative_sq(to, c));
-
-    acc_increment(&NN, board->acc, toIndex + whitePov);
-    acc_increment(&NN, board->acc + NN.layerSizes[1], toIndex + blackPov);
-    acc_decrement(&NN, board->acc, fromIndex + whitePov);
-    acc_decrement(&NN, board->acc + NN.layerSizes[1], fromIndex + blackPov);
-}
-
-INLINED void remove_piece(board_t *board, square_t square)
-{
-    piece_t piece = piece_on(board, square);
-    bitboard_t sqbb = square_bb(square);
-    piecetype_t pt = piece_type(piece);
-    color_t c = piece_color(piece);
-
-    board->piecetypeBB[ALL_PIECES] ^= sqbb;
-    board->piecetypeBB[pt] ^= sqbb;
-    board->colorBB[c] ^= sqbb;
-    board->pieceCount[piece]--;
-    board->pieceCount[create_piece(c, ALL_PIECES)]--;
-    board->psqScorePair -= PsqScore[piece][square];
-
-    extern Network NN;
-
-    int whitePov = 368 * c;
-    int blackPov = whitePov ^ 368;
-    int index = acc_base_index(pt, relative_sq(square, c));
-
-    acc_decrement(&NN, board->acc, index + whitePov);
-    acc_decrement(&NN, board->acc + NN.layerSizes[1], index + blackPov);
-}
-
-INLINED void do_move(board_t *board, move_t move, boardstack_t *stack)
-{
-    do_move_gc(board, move, stack, move_gives_check(board, move));
-}
-
-#endif // BOARD_H
+#endif

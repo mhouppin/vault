@@ -1,13 +1,13 @@
 /*
-**    Vault, a UCI-compliant chess engine derivating from Stash
-**    Copyright (C) 2019-2022 Morgan Houppin
+**    Stash, a UCI chess playing engine developed from scratch
+**    Copyright (C) 2019-2025 Morgan Houppin
 **
-**    Vault is free software: you can redistribute it and/or modify
+**    Stash is free software: you can redistribute it and/or modify
 **    it under the terms of the GNU General Public License as published by
 **    the Free Software Foundation, either version 3 of the License, or
 **    (at your option) any later version.
 **
-**    Vault is distributed in the hope that it will be useful,
+**    Stash is distributed in the hope that it will be useful,
 **    but WITHOUT ANY WARRANTY; without even the implied warranty of
 **    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 **    GNU General Public License for more details.
@@ -19,28 +19,41 @@
 #ifndef HASHKEY_H
 #define HASHKEY_H
 
-#include "types.h"
+#include "chess_types.h"
+#include "core.h"
 
-typedef uint64_t hashkey_t;
+// Typedef for hashing keys
+typedef u64 Key;
 
-INLINED uint64_t mul_hi64(uint64_t x, uint64_t n)
-{
-    uint64_t xlo = (uint32_t)x;
-    uint64_t xhi = x >> 32;
-    uint64_t nlo = (uint32_t)n;
-    uint64_t nhi = n >> 32;
-    uint64_t c1 = (xlo * nlo) >> 32;
-    uint64_t c2 = (xhi * nlo) + c1;
-    uint64_t c3 = (xlo * nhi) + (uint32_t)c2;
+// Multiplies two u64s and returns the high 64 bits of the result
+INLINED u64 u64_mulhi(u64 lhs, u64 rhs) {
+#ifdef HAS_INT128
+    return ((u128)lhs * (u128)rhs) >> 64;
+#else
+    u64 llo = (u32)lhs;
+    u64 lhi = lhs >> 32;
+    u64 rlo = (u32)rhs;
+    u64 rhi = rhs >> 32;
+    u64 c1 = (llo * rlo) >> 32;
+    u64 c2 = (lhi * rlo) + c1;
+    u64 c3 = (llo * rhi) + (u32)c2;
 
-    return (xhi * nhi + (c2 >> 32) + (c3 >> 32));
+    return lhi * rhi + (c2 >> 32) + (c3 >> 32);
+#endif
 }
 
-extern hashkey_t ZobristPsq[PIECE_NB][SQUARE_NB];
-extern hashkey_t ZobristEnPassant[FILE_NB];
-extern hashkey_t ZobristCastling[CASTLING_NB];
-extern hashkey_t ZobristBlackToMove;
+// Global table for Zobrist Piece-Square hashes
+extern Key ZobristPsq[PIECE_NB][SQUARE_NB];
+
+// Global table for Zobrist en passant hashes
+extern Key ZobristEnPassant[FILE_NB];
+
+// Global table for Zobrist castling hashes
+extern Key ZobristCastling[CASTLING_MASK_NB];
+
+// Global value for Zobrist STM hash
+extern Key ZobristSideToMove;
 
 void zobrist_init(void);
 
-#endif // HASHKEY_H
+#endif

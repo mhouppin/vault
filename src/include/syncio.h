@@ -16,20 +16,32 @@
 **    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#ifndef RANDOM_H
-#define RANDOM_H
+#ifndef SYNCIO_H
+#define SYNCIO_H
 
-#include "core.h"
+#include <stdio.h>
 
-// Generates a random 64-bit unsigned integer
-INLINED u64 u64_random(u64 *seed) {
-    u64 x = *seed;
+#include "strmanip.h"
+#include "strview.h"
 
-    x ^= x >> 12;
-    x ^= x << 25;
-    x ^= x >> 27;
-    *seed = x;
-    return x * U64(0x2545F4914F6CDD1D);
+void sync_init(void);
+
+void sync_lock_stdout(void);
+
+void sync_unlock_stdout(void);
+
+usize fwrite_strview(FILE *f, StringView strview);
+
+INLINED usize fwrite_string(FILE *f, const String *string) {
+    return fwrite_strview(f, strview_from_string(string));
 }
+
+// Enable/disable some global debug information
+void toggle_debug(bool state);
+
+// Do a printf() with the passed parameters, but only if debugging has been enabled
+void info_debug(const char *fmt, ...);
+
+usize string_getline(FILE *f, String *string);
 
 #endif

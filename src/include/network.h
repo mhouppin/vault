@@ -1,90 +1,83 @@
+/*
+**    Stash, a UCI chess playing engine developed from scratch
+**    Copyright (C) 2019-2025 Morgan Houppin
+**
+**    Stash is free software: you can redistribute it and/or modify
+**    it under the terms of the GNU General Public License as published by
+**    the Free Software Foundation, either version 3 of the License, or
+**    (at your option) any later version.
+**
+**    Stash is distributed in the hope that it will be useful,
+**    but WITHOUT ANY WARRANTY; without even the implied warranty of
+**    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+**    GNU General Public License for more details.
+**
+**    You should have received a copy of the GNU General Public License
+**    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 #ifndef NETWORK_H
 #define NETWORK_H
 
-#include <stdio.h>
-#include "activation.h"
-#include "weight.h"
+#include "chess_types.h"
+#include "core.h"
 
-// API for loading a single u32 from a file.
+enum {
+    INPUT_SIZE = 768,
+    HIDDEN_SIZE = 64,
 
-int integer_load(FILE *fp, uint32_t *u);
-int integer_save(FILE *fp, uint32_t u);
+    QA = 255,
+    QB = 64,
+    SCALE = 192,
+};
 
-// General struct for ANNs.
-//
-// Note: unless initialization fails during nn_load() or nn_create(),
-// nn_destroy() is never called in the API. If you have previously allocated
-// resources on a network, please call nn_destroy() before using these
-// functions to avoid memory leaks.
-typedef struct _Network
-{
-    // Number of layers (including the output layer).
-    size_t layers;
+typedef struct __attribute__((aligned(64))) {
+    i16 values[HIDDEN_SIZE];
+} Accumulator;
 
-    // Array denoting the number of neurons per layer, not including biases.
-    size_t *layerSizes;
+typedef struct {
+    Accumulator pov[COLOR_NB];
+} AccumulatorPair;
 
-    // Array holding all the weights of the network. We store them contiguously
-    // to avoid having to do multiple allocations at initialization time.
-    weight_t *weights;
+typedef struct {
+    Accumulator feature_weights[INPUT_SIZE];
+    Accumulator feature_bias;
+    Accumulator stm_output_weights;
+    Accumulator nstm_output_weights;
+    i16 output_bias;
+} Network;
 
-    // Array of pre-computed offsets for accessing the weights of a layer.
-    // Intended as both a speedup and a simplification of the
-    // inference/backprop code.
-    size_t *layerOffsets;
-
-    // List of activation IDs for each layer.
-    int *activationIds;
-
-    // List of activation functions for each layer.
-    Activation *activations;
-
-    // List of activation derivatives for each layer.
-    Activation *derivatives;
-
-    // Two arrays capable of holding all inputs/outputs of a layer, used for
-    // inference and backprop computations.
-    weight_t *cpuInput;
-    weight_t *cpuOutput;
+INLINED u16 feature_index(Piece piece, Square square) {
+    return piece_color(piece) * 384 + (piece_type(piece) - PAWN) * 64 + square;
 }
-Network;
 
-// Creates a new network with the given parameters, with all weights and biases
-// zeroed. Returns 0 if sucessful, a non-zero integer otherwise.
-int nn_create(Network *nn, size_t layers, const size_t layerSizes[], int activationIds[]);
+// Zero-initializes the accumulator.
+void acc_init_zero(Accumulator *acc);
 
-// Loads a network from a file. Returns 0 if sucessful, a non-zero integer
-// otherwise.
-int nn_load(Network *nn, const char *filename);
+// Initializes the accumulator with the network bias.
+void acc_init(Accumulator *restrict acc, const Network *restrict network);
 
-// Saves a network from a file. Returns 0 if sucessful, a non-zero integer
-// otherwise.
-int nn_save(Network *nn, const char *filename);
+void acc_add(Accumulator *restrict acc, usize idx, const Network *restrict network);
 
-// Changes the activation function of a specific layer.
-void nn_set_layer_activation(Network *nn, size_t layer, int activationId);
+void acc_sub(Accumulator *restrict acc, usize idx, const Network *restrict network);
 
-// Computes the outputs for the given inputs and returns them in the user-given
-// buffer.
-void nn_compute(Network *restrict nn, const weight_t *restrict inputs,
-    weight_t *restrict outputs);
+INLINED void acc_pair_add(AccumulatorPair *restrict acc_pair, usize idx, const Network *restrict network) {
+    acc_add(&acc_pair->pov[WHITE], idx, network);
+    acc_add(&acc_pair->pov[BLACK], ((idx >= 384) ? idx - 384 : idx + 384) ^ 56, network);
+}
 
-// Computes the outputs for the given inputs in ioBuffer and returns them in the
-// same buffer. This function requires that both cpuBuffer and ioBuffer are able
-// to hold the largest layer of the network in memory.
-void nn_const_compute(const Network *restrict nn, weight_t *restrict ioBuffer,
-    weight_t *restrict cpuBuffer);
+INLINED void acc_pair_sub(AccumulatorPair *restrict acc_pair, usize idx, const Network *restrict network) {
+    acc_sub(&acc_pair->pov[WHITE], idx, network);
+    acc_sub(&acc_pair->pov[BLACK], ((idx >= 384) ? idx - 384 : idx + 384) ^ 56, network);
+}
 
-// Randomize all weights of the network given the value range and the initial
-// seed. Note that this yields the same results as making a loop of
-// nn_init_layer_weights() with the same parameters.
-void nn_init_all_weights(Network *nn, weight_t minValue, weight_t maxValue, int seed);
+// Zero-initializes the network.
+void network_init(Network *network);
 
-// Randomize all weights of the specified layer given the value range and the
-// initial seed.
-void nn_init_layer_weights(Network *nn, weight_t minValue, weight_t maxValue, int seed, size_t layer);
+// Loads the network from the given file.
+void network_load_from_file(Network *network, const char *filename);
 
-// Frees all memory allocated by the network.
-void nn_destroy(Network *nn);
+// Calculates the output of the network.
+i16 network_evaluate(const Network *restrict network, Accumulator *restrict us, Accumulator *restrict them);
 
 #endif

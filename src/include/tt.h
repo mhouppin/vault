@@ -1,13 +1,13 @@
 /*
-**    Vault, a UCI-compliant chess engine derivating from Stash
-**    Copyright (C) 2019-2022 Morgan Houppin
+**    Stash, a UCI chess playing engine developed from scratch
+**    Copyright (C) 2019-2025 Morgan Houppin
 **
-**    Vault is free software: you can redistribute it and/or modify
+**    Stash is free software: you can redistribute it and/or modify
 **    it under the terms of the GNU General Public License as published by
 **    the Free Software Foundation, either version 3 of the License, or
 **    (at your option) any later version.
 **
-**    Vault is distributed in the hope that it will be useful,
+**    Stash is distributed in the hope that it will be useful,
 **    but WITHOUT ANY WARRANTY; without even the implied warranty of
 **    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 **    GNU General Public License for more details.
@@ -19,63 +19,97 @@
 #ifndef TT_H
 #define TT_H
 
-#include <string.h>
+#include "chess_types.h"
 #include "hashkey.h"
-#include "types.h"
 
-typedef struct tt_entry_s
-{
-    hashkey_t key;
-    score_t score;
-    score_t eval;
-    uint8_t depth;
-    uint8_t genbound;
-    uint16_t bestmove;
-}
-tt_entry_t;
+enum {
+    ENTRY_CLUSTER_SIZE = 4,
 
-enum { ClusterSize = 4 };
+    GENERATION_SHIFT = 4,
+    GENERATION_MASK = 256 - GENERATION_SHIFT,
+    GENERATION_CYCLE = 256 + GENERATION_SHIFT - 1,
+};
 
-typedef struct cluster_s
-{
-    tt_entry_t clEntry[ClusterSize];
-}
-cluster_t;
+typedef struct {
+    Key key;
+    Score score;
+    Score eval;
+    u8 depth;
+    u8 genbound;
+    Move bestmove;
+} TranspositionEntry;
 
-typedef struct transposition_s
-{
-    size_t clusterCount;
-    cluster_t *table;
-    uint8_t generation;
-}
-transposition_t;
-
-extern transposition_t TT;
-
-INLINED tt_entry_t *tt_entry_at(hashkey_t k)
-{
-    return (TT.table[mul_hi64(k, TT.clusterCount)].clEntry);
+INLINED i16 tt_entry_replace_score(const TranspositionEntry *tt_entry, u8 generation) {
+    return (i16)tt_entry->depth
+        - (((i16)GENERATION_CYCLE + (i16)generation - (i16)tt_entry->genbound) & GENERATION_MASK);
 }
 
-INLINED void tt_clear(void)
-{
-    TT.generation += 4;
+INLINED Bound tt_entry_bound(const TranspositionEntry *tt_entry) {
+    return (Bound)(tt_entry->genbound & ~GENERATION_MASK);
 }
 
-INLINED score_t score_to_tt(score_t s, int plies)
-{
-    return (s >= MATE_FOUND ? s + plies : s <= -MATE_FOUND ? s - plies : s);
+typedef struct {
+    TranspositionEntry cluster_entry[ENTRY_CLUSTER_SIZE];
+} TranspositionCluster;
+
+// Required for correct prefetching and structure alignment
+static_assert(
+    64 % sizeof(TranspositionCluster) == 0,
+    "Clusters are not aligned to cache boundaries"
+);
+
+typedef struct {
+    usize cluster_count;
+    TranspositionCluster *table;
+    u8 generation;
+} TranspositionTable;
+
+// Returns the entry cluster for the given hashkey
+INLINED TranspositionEntry *tt_entry_at(TranspositionTable *tt, Key key) {
+    return tt->table[u64_mulhi(key, tt->cluster_count)].cluster_entry;
 }
 
-INLINED score_t score_from_tt(score_t s, int plies)
-{
-    return (s >= MATE_FOUND ? s - plies : s <= -MATE_FOUND ? s + plies : s);
+INLINED void tt_new_search(TranspositionTable *tt) {
+    tt->generation += GENERATION_SHIFT;
 }
 
-void tt_bzero(size_t threadCount);
-tt_entry_t *tt_probe(hashkey_t key, bool *found);
-void tt_save(tt_entry_t *entry, hashkey_t k, score_t s, score_t e, int d, int b, move_t m);
-int tt_hashfull(void);
-void tt_resize(size_t mbsize);
+INLINED Score score_to_tt(Score score, u16 plies_from_root) {
+    return score >= MATE_FOUND ? score + plies_from_root
+        : score <= -MATE_FOUND ? score - plies_from_root
+                               : score;
+}
 
-#endif // TT_H
+INLINED Score score_from_tt(Score score, u16 plies_from_root) {
+    return score >= MATE_FOUND ? score - plies_from_root
+        : score <= -MATE_FOUND ? score + plies_from_root
+                               : score;
+}
+
+void tt_init(TranspositionTable *tt);
+
+void tt_destroy(TranspositionTable *tt);
+
+// Clears the TT contents before starting a new game
+void tt_init_new_game(TranspositionTable *tt, usize thread_count);
+
+// Returns data matching the given key
+TranspositionEntry *tt_probe(TranspositionTable *tt, Key key, bool *found);
+
+// Saves the given entry in the TT
+void tt_save(
+    TranspositionTable *tt,
+    TranspositionEntry *tt_entry,
+    Key key,
+    Score score,
+    Score eval,
+    i16 depth,
+    Bound bound,
+    Move bestmove
+);
+
+// Returns the filled proportion of the TT (per mil).
+u16 tt_hashfull(TranspositionTable *tt);
+
+void tt_resize(TranspositionTable *tt, usize size_mb, usize thread_count);
+
+#endif

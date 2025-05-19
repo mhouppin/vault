@@ -1,13 +1,13 @@
 /*
-**    Vault, a UCI-compliant chess engine derivating from Stash
-**    Copyright (C) 2019-2022 Morgan Houppin
+**    Stash, a UCI chess playing engine developed from scratch
+**    Copyright (C) 2019-2025 Morgan Houppin
 **
-**    Vault is free software: you can redistribute it and/or modify
+**    Stash is free software: you can redistribute it and/or modify
 **    it under the terms of the GNU General Public License as published by
 **    the Free Software Foundation, either version 3 of the License, or
 **    (at your option) any later version.
 **
-**    Vault is distributed in the hope that it will be useful,
+**    Stash is distributed in the hope that it will be useful,
 **    but WITHOUT ANY WARRANTY; without even the implied warranty of
 **    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 **    GNU General Public License for more details.
@@ -16,93 +16,156 @@
 **    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <stdlib.h>
-#include <string.h>
-#include "accumulator.h"
-#include "endgame.h"
-#include "engine.h"
-#include "network.h"
-#include "pawns.h"
-#include "types.h"
+#include "evaluate.h"
 
-bool is_kxk_endgame(const board_t *board, color_t us)
-{
-    // Weak side has pieces or Pawns, this is not a KXK endgame.
+#include "movelist.h"
+#include "psq_table.h"
 
-    if (more_than_one(color_bb(board, not_color(us))))
-        return (false);
+// clang-format on
 
-    return (board->stack->material[us] >= ROOK_MG_SCORE);
+static bool opposite_colored_bishops(Bitboard bishops) {
+    return (bishops & DSQ_BB) && (bishops & LSQ_BB);
 }
 
-score_t eval_kxk(const board_t *board, color_t us)
-{
-    // Be careful to avoid stalemating the weak King.
-
-    if (board->sideToMove != us && !board->stack->checkers)
-    {
-        movelist_t list;
-
-        list_all(&list, board);
-        if (movelist_size(&list) == 0)
-            return (0);
+static bool is_kxk_endgame(const Board *board, Color us) {
+    // If the weak side has pieces or Pawns, this is not a KXK endgame.
+    if (bb_more_than_one(board_color_bb(board, color_flip(us)))) {
+        return false;
     }
 
-    square_t winningKsq = get_king_square(board, us);
-    square_t losingKsq = get_king_square(board, not_color(us));
-    score_t score = board->stack->material[us] + popcount(piecetype_bb(board, PAWN)) * PAWN_MG_SCORE;
+    return board->stack->material[us] >= ROOK_MG_SCORE;
+}
+
+// Bonus for pieces close to the corner.
+static Score corner_bonus(Square square) {
+    const Rank rank = square_rank(square);
+    const File file = square_file(square);
+    const i16 rdist = i16_min(rank, rank ^ 0b111u);
+    const i16 fdist = i16_min(file, file ^ 0b111u);
+
+    return 50 - 2 * (fdist * fdist + rdist * rdist);
+}
+
+// Bonus for pieces close to each other.
+static Score close_bonus(Square square1, Square square2) {
+    return 70 - 10 * square_distance(square1, square2);
+}
+
+static Score eval_kbnk(const Board *board, Color us) {
+    const Square our_king = board_king_square(board, us);
+    Square their_king = board_king_square(board, color_flip(us));
+    Score score = VICTORY + KNIGHT_MG_SCORE + BISHOP_MG_SCORE + close_bonus(their_king, our_king);
+
+    // Don't push the King to the wrong corner.
+    if (board_piecetype_bb(board, BISHOP) & DSQ_BB) {
+        their_king = square_flip(their_king);
+    }
+
+    score += i8_abs((i8)square_file(their_king) - (i8)square_rank(their_king)) * 100;
+    return board->side_to_move == us ? score : -score;
+}
+
+static Score eval_kxk(const Board *board, Color us) {
+    // Be careful to avoid stalemating the weak King.
+    if (board->side_to_move != us && !board->stack->checkers) {
+        Movelist list;
+
+        movelist_generate_legal(&list, board);
+
+        if (movelist_size(&list) == 0) {
+            return 0;
+        }
+    }
+
+    // KBNK needs some special handling for mating correctly.
+    if (board->stack->material[us] == KNIGHT_MG_SCORE + BISHOP_MG_SCORE) {
+        return eval_kbnk(board, us);
+    }
+
+    const Square winning_ksq = board_king_square(board, us);
+    const Square losing_ksq = board_king_square(board, color_flip(us));
+    Score score = board->stack->material[us]
+        + board_piece_count(board, create_piece(us, PAWN)) * PAWN_MG_SCORE;
 
     // Push the weak King to the corner.
+    score += corner_bonus(losing_ksq);
 
-    score += edge_bonus(losingKsq);
-
-    // Give a bonus for close Kings.
-
-    score += close_bonus(winningKsq, losingKsq);
+    // Keep the two Kings close for mating with low material.
+    score += close_bonus(winning_ksq, losing_ksq);
 
     // Set the score as winning if we have mating material:
     // - a major piece;
     // - a Bishop and a Knight;
     // - two opposite colored Bishops;
     // - three Knights.
-    // Note that the KBNK case has already been handled at this point
-    // in the eval, so it's not necessary to worry about it.
+    const Bitboard knights = board_piecetype_bb(board, KNIGHT);
+    const Bitboard bishops = board_piecetype_bb(board, BISHOP);
 
-    bitboard_t knights = piecetype_bb(board, KNIGHT);
-    bitboard_t bishops = piecetype_bb(board, BISHOP);
-
-    if (piecetype_bb(board, QUEEN) || piecetype_bb(board, ROOK)
-        || (knights && bishops)
-        || ((bishops & DARK_SQUARES) && (bishops & ~DARK_SQUARES))
-        || (popcount(knights) >= 3))
+    if (board_piecetypes_bb(board, QUEEN, ROOK) || (knights && bishops)
+        || opposite_colored_bishops(bishops) || bb_popcount(knights) >= 3) {
         score += VICTORY;
+    }
 
-    return (board->sideToMove == us ? score : -score);
+    return (board->side_to_move == us) ? score : -score;
 }
 
-score_t evaluate(const board_t *board)
-{
-    // Do we have a specialized endgame eval for the current configuration ?
-    const endgame_entry_t *entry = endgame_probe(board);
-
-    if (entry != NULL)
-        return (entry->func(board, entry->winningSide));
+Score evaluate_noacc(const Board *board) {
+    extern Network GlobalNetwork;
 
     // Is there a KXK situation ? (lone King vs mating material)
+    if (is_kxk_endgame(board, WHITE)) {
+        return eval_kxk(board, WHITE);
+    }
 
-    if (is_kxk_endgame(board, WHITE))
-        return (eval_kxk(board, WHITE));
-    if (is_kxk_endgame(board, BLACK))
-        return (eval_kxk(board, BLACK));
+    if (is_kxk_endgame(board, BLACK)) {
+        return eval_kxk(board, BLACK);
+    }
 
-    extern Network NN;
+    return nn_evaluate_noacc(board, &GlobalNetwork);
+}
 
-    weight_t outputBuffer[736];
-    weight_t accCopy[736];
+Score evaluate(const Board *board, AccumulatorPair *restrict acc_pair) {
+    extern Network GlobalNetwork;
 
-    memcpy(accCopy, board->acc, sizeof(weight_t) * NN.layerSizes[1] * 2);
+    // Is there a KXK situation ? (lone King vs mating material)
+    if (is_kxk_endgame(board, WHITE)) {
+        return eval_kxk(board, WHITE);
+    }
 
-    nn_acc_compute(&NN, accCopy + (size_t)board->sideToMove * NN.layerSizes[1], outputBuffer);
+    if (is_kxk_endgame(board, BLACK)) {
+        return eval_kxk(board, BLACK);
+    }
 
-    return clamp((int64_t)outputBuffer[0] * 200 / WG_ONE, 1 - VICTORY, VICTORY - 1);
+    return nn_evaluate(board, &GlobalNetwork, acc_pair);
+}
+
+
+Score nn_evaluate_noacc(const Board *board, const Network *network) {
+    Accumulator white, black;
+
+    acc_init(&white, network);
+    acc_init(&black, network);
+
+    for (Bitboard occ = board_occupancy_bb(board); occ;) {
+        Square sq = bb_pop_first_square(&occ);
+        Piece pc = board_piece_on(board, sq);
+        u16 widx = feature_index(pc, sq);
+        u16 bidx = feature_index(opposite_piece(pc), square_flip(sq));
+
+        acc_add(&white, widx, network);
+        acc_add(&black, bidx, network);
+    }
+
+    if (board->side_to_move == WHITE) {
+        return network_evaluate(network, &white, &black);
+    } else {
+        return network_evaluate(network, &black, &white);
+    }
+}
+
+Score nn_evaluate(const Board *restrict board, const Network *restrict network, AccumulatorPair *restrict acc_pair) {
+    const Color us = board->side_to_move;
+    const Color them = color_flip(us);
+
+    return network_evaluate(network, &acc_pair->pov[us], &acc_pair->pov[them]);
 }

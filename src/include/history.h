@@ -1,13 +1,13 @@
 /*
-**    Vault, a UCI-compliant chess engine derivating from Stash
-**    Copyright (C) 2019-2022 Morgan Houppin
+**    Stash, a UCI chess playing engine developed from scratch
+**    Copyright (C) 2019-2025 Morgan Houppin
 **
-**    Vault is free software: you can redistribute it and/or modify
+**    Stash is free software: you can redistribute it and/or modify
 **    it under the terms of the GNU General Public License as published by
 **    the Free Software Foundation, either version 3 of the License, or
 **    (at your option) any later version.
 **
-**    Vault is distributed in the hope that it will be useful,
+**    Stash is distributed in the hope that it will be useful,
 **    but WITHOUT ANY WARRANTY; without even the implied warranty of
 **    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 **    GNU General Public License for more details.
@@ -19,61 +19,111 @@
 #ifndef HISTORY_H
 #define HISTORY_H
 
-#include <stdlib.h>
-#include "types.h"
+#include "core.h"
+#include "hashkey.h"
 
-enum
-{
-    HistoryMaxScore = 8192,
-    HistoryScale = 2,
-    HistoryResolution = HistoryMaxScore * HistoryScale
+enum {
+    HISTORY_MAX = 16384,
+
+    CORRECTION_HISTORY_ENTRY_NB = 16384,
+    CORRECTION_HISTORY_GRAIN = 256,
+    CORRECTION_HISTORY_WEIGHT_SCALE = 256,
+    CORRECTION_HISTORY_MAX = CORRECTION_HISTORY_GRAIN * 32,
 };
 
-typedef int16_t butterfly_history_t[COLOR_NB][SQUARE_NB * SQUARE_NB];
-typedef int16_t piece_history_t[PIECE_NB][SQUARE_NB];
-typedef int16_t capture_history_t[PIECE_NB][SQUARE_NB][PIECETYPE_NB];
-typedef piece_history_t continuation_history_t[PIECE_NB][SQUARE_NB];
-typedef move_t countermove_history_t[PIECE_NB][SQUARE_NB];
+INLINED i16 history_bonus(u16 depth) {
+    const i32 d = (i32)depth;
 
-INLINED int history_bonus(int depth)
-{
-    return (depth <= 11 ? 14 * depth * depth : 2000);
+    return (i16)i32_min(27 * d * d - 32 * d - 34, 2461);
 }
 
-INLINED void add_bf_history(butterfly_history_t hist, piece_t piece, move_t move, int32_t bonus)
-{
-    int16_t *entry = &hist[piece_color(piece)][square_mask(move)];
-
-    *entry += bonus - (int32_t)*entry * abs(bonus) / HistoryResolution;
+INLINED void update_hist_entry(i16 *entry, i16 bonus) {
+    *entry += bonus - (i32)*entry * (i32)i32_abs(bonus) / HISTORY_MAX;
 }
 
-INLINED score_t get_bf_history_score(const butterfly_history_t hist, piece_t piece, move_t move)
-{
-    return (hist[piece_color(piece)][square_mask(move)] / HistoryScale);
+typedef struct {
+    i16 data[COLOR_NB][SQUARE_NB * SQUARE_NB];
+} ButterflyHistory;
+
+INLINED void butterfly_hist_update(ButterflyHistory *hist, Piece piece, Move move, i16 bonus) {
+    update_hist_entry(&hist->data[piece_color(piece)][move_square_mask(move)], bonus);
 }
 
-INLINED void add_pc_history(piece_history_t hist, piece_t pc, square_t to, int32_t bonus)
-{
-    int16_t *entry = &hist[pc][to];
-
-    *entry += bonus - (int32_t)*entry * abs(bonus) / HistoryResolution;
+INLINED i16 butterfly_hist_score(const ButterflyHistory *hist, Piece piece, Move move) {
+    return hist->data[piece_color(piece)][move_square_mask(move)];
 }
 
-INLINED score_t get_pc_history_score(const piece_history_t hist, piece_t pc, square_t to)
-{
-    return (hist[pc][to] / HistoryScale);
+typedef struct {
+    i16 data[PIECE_NB][SQUARE_NB];
+} PieceHistory;
+
+typedef struct {
+    PieceHistory piece_history[PIECE_NB][SQUARE_NB];
+} ContinuationHistory;
+
+typedef struct {
+    Move data[PIECE_NB][SQUARE_NB];
+} CountermoveHistory;
+
+INLINED void piece_hist_update(PieceHistory *hist, Piece piece, Square to, i16 bonus) {
+    update_hist_entry(&hist->data[piece][to], bonus);
 }
 
-INLINED void add_cap_history(capture_history_t hist, piece_t pc, square_t to, piece_t captured, int32_t bonus)
-{
-    int16_t *entry = &hist[pc][to][piece_type(captured)];
-
-    *entry += bonus - (int32_t)*entry * abs(bonus) / HistoryResolution;
+INLINED i16 piece_hist_score(const PieceHistory *hist, Piece piece, Square to) {
+    return hist->data[piece][to];
 }
 
-INLINED score_t get_cap_history_score(const capture_history_t hist, piece_t pc, square_t to, piece_t captured)
-{
-    return (hist[pc][to][piece_type(captured)] / HistoryScale);
+typedef struct {
+    i16 data[PIECE_NB][SQUARE_NB][PIECETYPE_NB];
+} CaptureHistory;
+
+INLINED void capture_hist_update(
+    CaptureHistory *hist,
+    Piece piece,
+    Square to,
+    Piecetype captured,
+    i16 bonus
+) {
+    update_hist_entry(&hist->data[piece][to][captured], bonus);
 }
 
-#endif // HISTORY_H
+INLINED i16
+    capture_hist_score(const CaptureHistory *hist, Piece piece, Square to, Piecetype captured) {
+    return hist->data[piece][to][captured];
+}
+
+typedef struct {
+    i16 data[COLOR_NB][CORRECTION_HISTORY_ENTRY_NB];
+} CorrectionHistory;
+
+INLINED void correction_hist_update(
+    CorrectionHistory *hist,
+    Color stm,
+    Key entry_key,
+    i16 weight,
+    i32 eval_diff
+) {
+    i16 *entry = &hist->data[stm][entry_key % CORRECTION_HISTORY_ENTRY_NB];
+    const i32 scaled_diff = eval_diff * CORRECTION_HISTORY_GRAIN;
+
+    i32 update = (i32)*entry * (i32)(CORRECTION_HISTORY_WEIGHT_SCALE - weight)
+        + (i32)scaled_diff * (i32)weight;
+
+    *entry = (i16)i32_clamp(
+        update / CORRECTION_HISTORY_WEIGHT_SCALE,
+        -CORRECTION_HISTORY_MAX,
+        CORRECTION_HISTORY_MAX
+    );
+}
+
+INLINED i16 correction_hist_score(const CorrectionHistory *hist, Color stm, Key entry_key) {
+    return hist->data[stm][entry_key % CORRECTION_HISTORY_ENTRY_NB] / CORRECTION_HISTORY_GRAIN;
+}
+
+static_assert(sizeof(ButterflyHistory) % 64 == 0, "Misaligned history");
+static_assert(sizeof(ContinuationHistory) % 64 == 0, "Misaligned history");
+static_assert(sizeof(CountermoveHistory) % 64 == 0, "Misaligned history");
+static_assert(sizeof(CaptureHistory) % 64 == 0, "Misaligned history");
+static_assert(sizeof(CorrectionHistory) % 64 == 0, "Misaligned history");
+
+#endif

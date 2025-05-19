@@ -1,13 +1,13 @@
 /*
-**    Vault, a UCI-compliant chess engine derivating from Stash
-**    Copyright (C) 2019-2022 Morgan Houppin
+**    Stash, a UCI chess playing engine developed from scratch
+**    Copyright (C) 2019-2025 Morgan Houppin
 **
-**    Vault is free software: you can redistribute it and/or modify
+**    Stash is free software: you can redistribute it and/or modify
 **    it under the terms of the GNU General Public License as published by
 **    the Free Software Foundation, either version 3 of the License, or
 **    (at your option) any later version.
 **
-**    Vault is distributed in the hope that it will be useful,
+**    Stash is distributed in the hope that it will be useful,
 **    but WITHOUT ANY WARRANTY; without even the implied warranty of
 **    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 **    GNU General Public License for more details.
@@ -16,184 +16,200 @@
 **    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <stdlib.h>
 #include "bitboard.h"
-#include "random.h"
-#include "types.h"
-
-bitboard_t LineBits[SQUARE_NB][SQUARE_NB];
-bitboard_t PseudoMoves[PIECETYPE_NB][SQUARE_NB];
-bitboard_t PawnMoves[COLOR_NB][SQUARE_NB];
-magic_t BishopMagics[SQUARE_NB];
-magic_t RookMagics[SQUARE_NB];
-int SquareDistance[SQUARE_NB][SQUARE_NB];
-
-bitboard_t HiddenRookTable[0x19000];
-bitboard_t HiddenBishopTable[0x1480];
-
-// Returns a bitboard representing all the reachable squares by a bishop
-// (or rook) from given square and given occupied squares.
-
-bitboard_t sliding_attack(const direction_t *directions, square_t square, bitboard_t occupied)
-{
-    bitboard_t attack = 0;
-
-    for (int i = 0; i < 4; ++i)
-        for (square_t s = square + directions[i];
-            is_valid_sq(s) && SquareDistance[s][s - directions[i]] == 1; s += directions[i])
-        {
-            attack |= square_bb(s);
-            if (occupied & square_bb(s))
-                break ;
-        }
-
-    return (attack);
-}
-
-// Initializes magic bitboard tables necessary for bishop, rook and queen moves.
-
-void magic_init(bitboard_t *table, magic_t *magics, const direction_t *directions)
-{
-    bitboard_t reference[4096], edges, b;
-
-#ifndef USE_PEXT
-    bitboard_t occupancy[4096];
-    int epoch[4096] = {0}, counter = 0;
-    uint64_t seed = 64;
-#endif
-
-    int size = 0;
-
-    for (square_t square = SQ_A1; square <= SQ_H8; ++square)
-    {
-        edges = ((RANK_1_BITS | RANK_8_BITS) & ~sq_rank_bb(square))
-            | ((FILE_A_BITS | FILE_H_BITS) & ~sq_file_bb(square));
-
-        magic_t *m = magics + square;
-
-        m->mask = sliding_attack(directions, square, 0) & ~edges;
-        m->shift = 64 - popcount(m->mask);
-        m->moves = (square == SQ_A1) ? table : magics[square - 1].moves + size;
-
-        b = 0;
-        size = 0;
-
-        do {
-#ifndef USE_PEXT
-            occupancy[size] = b;
-#endif
-            reference[size] = sliding_attack(directions, square, b);
 
 #ifdef USE_PEXT
-            m->moves[_pext_u64(b, m->mask)] = reference[size];
+// Do not include the header if USE_PEXT isn't specified, because we don't need
+// it in this case, and it might increase compilation time drastically.
+#include <immintrin.h>
 #endif
-            size++;
-            b = (b - m->mask) & m->mask;
+
+#include <stdio.h>
+
+#include "attacks.h"
+#include "chess_types.h"
+#include "core.h"
+#include "random.h"
+
+Bitboard LineBB[SQUARE_NB][SQUARE_NB];
+Bitboard RawAttacks[PIECETYPE_NB][SQUARE_NB];
+Bitboard PawnAttacks[COLOR_NB][SQUARE_NB];
+Magic BishopMagics[SQUARE_NB];
+Magic RookMagics[SQUARE_NB];
+u8 SquareDistance[SQUARE_NB][SQUARE_NB];
+
+Bitboard HiddenRookAttackTable[0x19000];
+Bitboard HiddenBishopAttackTable[0x1480];
+
+u32 magic_index(const Magic *magic, Bitboard occupancy) {
+#ifdef USE_PEXT
+    return _pext_u64(occupancy, magic->mask);
+#else
+    return (u32)(((occupancy & magic->mask) * magic->magic) >> magic->shift);
+#endif
+}
+
+// Returns a bitboard of all the reachable squares by a bishop/rook from the given square and board
+// occupancy
+Bitboard sliding_attacks_bb(const Direction *directions, Square square, Bitboard occupancy) {
+    Bitboard attacks = 0;
+
+    for (u8 i = 0; i < 4; ++i) {
+        for (Square sqi = square + directions[i];
+             square_is_valid(sqi) && square_distance(sqi, sqi - directions[i]) == 1;
+             sqi += directions[i]) {
+            bb_set_square(&attacks, sqi);
+            if (bb_square_is_set(occupancy, sqi)) {
+                break;
+            }
         }
-        while (b);
+    }
+
+    return attacks;
+}
+
+// Initializes magic bitboard tables for bishop rook and queen attacks
+void magic_init(Bitboard *attack_table, Magic *magic_table, const Direction directions[4]) {
+    Bitboard reference[1 << 12], edges, bb;
+    u32 size = 0;
+
+#ifndef USE_PEXT
+    Bitboard occupancy[1 << 12];
+
+    // The epoch is used to determine which iteration of the occupancy test we are in, to avoid
+    // having to zero the attack array between each failed iteration.
+    u32 epoch_table[1 << 12] = {0}, current_epoch = 0;
+    u64 seed = 64;
+#endif
+
+    for (Square square = SQ_A1; square <= SQ_H8; ++square) {
+        Magic *magic_entry = &magic_table[square];
+
+        // The edges of the board are not counted in the occupancy bits since we can reach them
+        // whether there's a piece on them or not because of capture moves, but we must still ensure
+        // they're accounted for if the piece is already on the edge for Rook moves.
+        edges = ((RANK_1_BB | RANK_8_BB) & ~square_rank_bb(square))
+            | ((FILE_A_BB | FILE_H_BB) & ~square_file_bb(square));
+
+        magic_entry->mask = sliding_attacks_bb(directions, square, 0) & ~edges;
+
+        // We will need popcount(mask) bits of information for indexing the occupancy, and (1 <<
+        // popcount(mask)) entries in the table for storing the corresponding attack bitboards.
+        magic_entry->shift = 64 - bb_popcount(magic_entry->mask);
+        magic_entry->moves =
+            (square == SQ_A1) ? attack_table : magic_table[square - 1].moves + size;
+
+        bb = 0;
+        size = 0;
+
+        // Iterate over all subsets of the occupancy mask with the Carry-Rippler trick and compute
+        // all attack bitboards for the current square based on the occupancy.
+        do {
+#ifndef USE_PEXT
+            occupancy[size] = bb;
+#endif
+
+            reference[size] = sliding_attacks_bb(directions, square, bb);
+
+#ifdef USE_PEXT
+            magic_entry->moves[__builtin_ia32_pext_di(bb, magic_entry->mask)] = reference[size];
+#endif
+
+            ++size;
+            bb = (bb - magic_entry->mask) & magic_entry->mask;
+        } while (bb);
 
 #ifndef USE_PEXT
 
-        for (int i = 0; i < size; )
-        {
-            for (m->magic = 0; popcount((m->magic * m->mask) >> 56) < 6; )
-                m->magic = qrandom(&seed) & qrandom(&seed) & qrandom(&seed);
+        // Now loop until we find a magic that maps each occupancy to a correct index in our magic
+        // table. We optimize the loop by using two binary ANDs to reduce the number of significant
+        // bits in the magic (good magics generally have high bit sparsity), and we reduce further
+        // the range of tested values by removing magics which do not generate enough significant
+        // bits for a full occupancy mask.
+        for (u32 i = 0; i < size;) {
+            for (magic_entry->magic = 0;
+                 u64_count_ones((magic_entry->magic * magic_entry->mask) >> 56) < 6;) {
+                magic_entry->magic = u64_random(&seed) & u64_random(&seed) & u64_random(&seed);
+            }
 
-            for (++counter, i = 0; i < size; ++i)
-            {
-                unsigned int index = magic_index(m, occupancy[i]);
+            // Check if the generated magic correctly maps each occupancy to its corresponding
+            // bitboard attack. Note that we build the table for the square as we test for each
+            // occupancy as a speedup, and that we allow two different occupancies to map to the
+            // same index if their corresponding bitboard attack is identical.
+            for (++current_epoch, i = 0; i < size; ++i) {
+                u32 index = magic_index(magic_entry, occupancy[i]);
 
-                if (epoch[index] < counter)
-                {
-                    epoch[index] = counter;
-                    m->moves[index] = reference[i];
+                // Check if we already wrote an attack bitboard at this index during this iteration
+                // of the loop. If not, we can set the attack bitboard corresponding to the
+                // occupancy at this index; otherwise we check if the attack bitboard already
+                // written is identical to the current one, and if it's not the case, the mapping
+                // failed, and we must try another value.
+                if (epoch_table[index] < current_epoch) {
+                    epoch_table[index] = current_epoch;
+                    magic_entry->moves[index] = reference[i];
+                } else if (magic_entry->moves[index] != reference[i]) {
+                    break;
                 }
-                else if (m->moves[index] != reference[i])
-                    break ;
             }
         }
 #endif
     }
 }
 
-// Initializes all bitboard tables at program startup.
+// Helper for Knight and King attack tables.
+void initialize_raw_attacks(Piecetype piecetype, const Direction directions[8]) {
+    for (Square square = SQ_A1; square <= SQ_H8; ++square)
+        for (u8 i = 0; i < 8; ++i) {
+            const Square to = square + directions[i];
 
-void bitboard_init(void)
-{
-    static const direction_t kingDirections[8] = {
-        -9, -8, -7, -1, 1, 7, 8, 9
-    };
-    static const direction_t knightDirections[8] = {
-        -17, -15, -10, -6, 6, 10, 15, 17
-    };
-    static const direction_t bishopDirections[4] = {
-        -9, -7, 7, 9
-    };
-    static const direction_t rookDirections[4] = {
-        -8, -1, 1, 8
-    };
-
-    // Initializes square distance table.
-
-    for (square_t sq1 = SQ_A1; sq1 <= SQ_H8; ++sq1)
-        for (square_t sq2 = SQ_A1; sq2 <= SQ_H8; ++sq2)
-        {
-            int fileDistance = abs(sq_file(sq1) - sq_file(sq2));
-            int rankDistance = abs(sq_rank(sq1) - sq_rank(sq2));
-
-            SquareDistance[sq1][sq2] = max(fileDistance, rankDistance);
+            if (square_is_valid(to) && square_distance(square, to) <= 2)
+                bb_set_square(&RawAttacks[piecetype][square], to);
         }
+}
 
-    // Initializes pawn pseudo-moves table.
+// Helper for Bishop and Rook raw attack tables.
+void initialize_raw_slider_attacks(Piecetype piecetype) {
+    for (Square square = SQ_A1; square <= SQ_H8; ++square) {
+        RawAttacks[piecetype][square] = attacks_bb(piecetype, square, 0);
 
-    for (square_t square = SQ_A1; square <= SQ_H8; ++square)
-    {
-        bitboard_t b = square_bb(square);
-
-        PawnMoves[WHITE][square] = (shift_up_left(b) | shift_up_right(b));
-        PawnMoves[BLACK][square] = (shift_down_left(b) | shift_down_right(b));
-    }
-
-    // Initializes king and knight pseudo-moves table.
-
-    for (square_t square = SQ_A1; square <= SQ_H8; ++square)
-    {
-        for (int i = 0; i < 8; ++i)
-        {
-            square_t to = square + kingDirections[i];
-
-            if (is_valid_sq(to) && SquareDistance[square][to] <= 2)
-                PseudoMoves[KING][square] |= square_bb(to);
-        }
-
-        for (int i = 0; i < 8; ++i)
-        {
-            square_t to = square + knightDirections[i];
-
-            if (is_valid_sq(to) && SquareDistance[square][to] <= 2)
-                PseudoMoves[KNIGHT][square] |= square_bb(to);
+        for (Square to = SQ_A1; to <= SQ_H8; ++to) {
+            if (bb_square_is_set(RawAttacks[piecetype][square], to)) {
+                LineBB[square][to] =
+                    attacks_bb(piecetype, square, 0) & attacks_bb(piecetype, to, 0);
+                LineBB[square][to] |= square_bb(square) | square_bb(to);
+            }
         }
     }
+}
 
-    magic_init(HiddenBishopTable, BishopMagics, bishopDirections);
-    magic_init(HiddenRookTable, RookMagics, rookDirections);
+void bitboard_init(void) {
+    static const Direction king_directions[8] = {-9, -8, -7, -1, 1, 7, 8, 9};
+    static const Direction knight_directions[8] = {-17, -15, -10, -6, 6, 10, 15, 17};
+    static const Direction bishop_directions[4] = {-9, -7, 7, 9};
+    static const Direction rook_directions[4] = {-8, -1, 1, 8};
 
-    // Initializes bishop, rook and queen pseudo-moves table.
-
-    for (square_t sq1 = SQ_A1; sq1 <= SQ_H8; ++sq1)
-    {
-        PseudoMoves[QUEEN][sq1] = PseudoMoves[BISHOP][sq1] = bishop_moves_bb(sq1, 0);
-        PseudoMoves[QUEEN][sq1] |= PseudoMoves[ROOK][sq1] = rook_moves_bb(sq1, 0);
-
-        for (square_t sq2 = SQ_A1; sq2 <= SQ_H8; ++sq2)
-        {
-            if (PseudoMoves[BISHOP][sq1] & square_bb(sq2))
-                LineBits[sq1][sq2] = (bishop_moves_bb(sq1, 0) & bishop_moves_bb(sq2, 0))
-                    | square_bb(sq1) | square_bb(sq2);
-
-            if (PseudoMoves[ROOK][sq1] & square_bb(sq2))
-                LineBits[sq1][sq2] = (rook_moves_bb(sq1, 0) & rook_moves_bb(sq2, 0))
-                    | square_bb(sq1) | square_bb(sq2);
+    for (Square square1 = SQ_A1; square1 <= SQ_H8; ++square1)
+        for (Square square2 = SQ_A1; square2 <= SQ_H8; ++square2) {
+            u8 file_dist = square_file_distance(square1, square2);
+            u8 rank_dist = square_rank_distance(square1, square2);
+            SquareDistance[square1][square2] = u8_max(file_dist, rank_dist);
         }
+
+    for (Square square = SQ_A1; square <= SQ_H8; ++square) {
+        Bitboard bb = square_bb(square);
+
+        PawnAttacks[WHITE][square] = bb_shift_up_left(bb) | bb_shift_up_right(bb);
+        PawnAttacks[BLACK][square] = bb_shift_down_left(bb) | bb_shift_down_right(bb);
     }
+
+    initialize_raw_attacks(KNIGHT, knight_directions);
+    initialize_raw_attacks(KING, king_directions);
+    magic_init(HiddenBishopAttackTable, BishopMagics, bishop_directions);
+    magic_init(HiddenRookAttackTable, RookMagics, rook_directions);
+
+    initialize_raw_slider_attacks(BISHOP);
+    initialize_raw_slider_attacks(ROOK);
+
+    for (Square square = SQ_A1; square <= SQ_H8; ++square)
+        RawAttacks[QUEEN][square] = RawAttacks[BISHOP][square] | RawAttacks[ROOK][square];
 }

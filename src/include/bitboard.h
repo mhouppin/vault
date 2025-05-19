@@ -1,13 +1,13 @@
 /*
-**    Vault, a UCI-compliant chess engine derivating from Stash
-**    Copyright (C) 2019-2022 Morgan Houppin
+**    Stash, a UCI chess playing engine developed from scratch
+**    Copyright (C) 2019-2025 Morgan Houppin
 **
-**    Vault is free software: you can redistribute it and/or modify
+**    Stash is free software: you can redistribute it and/or modify
 **    it under the terms of the GNU General Public License as published by
 **    the Free Software Foundation, either version 3 of the License, or
 **    (at your option) any later version.
 **
-**    Vault is distributed in the hope that it will be useful,
+**    Stash is distributed in the hope that it will be useful,
 **    but WITHOUT ANY WARRANTY; without even the implied warranty of
 **    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 **    GNU General Public License for more details.
@@ -19,297 +19,272 @@
 #ifndef BITBOARD_H
 #define BITBOARD_H
 
-#if (defined(USE_PREFETCH) || defined(USE_POPCNT) || defined(USE_PEXT))
-// Do not include the header if unspecified, because some compilers might
-// not have it.
-#include <immintrin.h>
-#endif
+#include "chess_types.h"
 
-#include "types.h"
+typedef u64 Bitboard;
 
-typedef uint64_t bitboard_t;
+// Constants for file bitboard masks
+static const Bitboard FILE_A_BB = U64(0x0101010101010101);
+static const Bitboard FILE_B_BB = U64(0x0202020202020202);
+static const Bitboard FILE_C_BB = U64(0x0404040404040404);
+static const Bitboard FILE_D_BB = U64(0x0808080808080808);
+static const Bitboard FILE_E_BB = U64(0x1010101010101010);
+static const Bitboard FILE_F_BB = U64(0x2020202020202020);
+static const Bitboard FILE_G_BB = U64(0x4040404040404040);
+static const Bitboard FILE_H_BB = U64(0x8080808080808080);
 
-#define FILE_A_BITS 0x0101010101010101ull
-#define FILE_B_BITS 0x0202020202020202ull
-#define FILE_C_BITS 0x0404040404040404ull
-#define FILE_D_BITS 0x0808080808080808ull
-#define FILE_E_BITS 0x1010101010101010ull
-#define FILE_F_BITS 0x2020202020202020ull
-#define FILE_G_BITS 0x4040404040404040ull
-#define FILE_H_BITS 0x8080808080808080ull
+// Constants for rank bitboard masks
+static const Bitboard RANK_1_BB = U64(0x00000000000000FF);
+static const Bitboard RANK_2_BB = U64(0x000000000000FF00);
+static const Bitboard RANK_3_BB = U64(0x0000000000FF0000);
+static const Bitboard RANK_4_BB = U64(0x00000000FF000000);
+static const Bitboard RANK_5_BB = U64(0x000000FF00000000);
+static const Bitboard RANK_6_BB = U64(0x0000FF0000000000);
+static const Bitboard RANK_7_BB = U64(0x00FF000000000000);
+static const Bitboard RANK_8_BB = U64(0xFF00000000000000);
 
-#define RANK_1_BITS 0x00000000000000FFull
-#define RANK_2_BITS 0x000000000000FF00ull
-#define RANK_3_BITS 0x0000000000FF0000ull
-#define RANK_4_BITS 0x00000000FF000000ull
-#define RANK_5_BITS 0x000000FF00000000ull
-#define RANK_6_BITS 0x0000FF0000000000ull
-#define RANK_7_BITS 0x00FF000000000000ull
-#define RANK_8_BITS 0xFF00000000000000ull
+// Constants for miscellaneous bitboard masks
+static const Bitboard ALL_BB = U64(0xFFFFFFFFFFFFFFFF);
+static const Bitboard DSQ_BB = U64(0xAA55AA55AA55AA55);
+static const Bitboard LSQ_BB = ~DSQ_BB;
+static const Bitboard KINGSIDE_BB = U64(0xF0F0F0F0F0F0F0F0);
+static const Bitboard QUEENSIDE_BB = U64(0x0F0F0F0F0F0F0F0F);
+static const Bitboard CENTER_FILES_BB = U64(0x3C3C3C3C3C3C3C3C);
+static const Bitboard CENTER_BB = U64(0x0000001818000000);
 
-#define FULL_BITS 0xFFFFFFFFFFFFFFFFull
+// The structure used for magic bitboards
+typedef struct {
+    Bitboard mask;
+    Bitboard magic;
+    Bitboard *moves;
+    u32 shift;
+} Magic;
 
-#define DARK_SQUARES 0xAA55AA55AA55AA55ull
+// This function returns the index of the attack bitboard for a given magic and occupancy bitboard.
+// Avoid using this function directly, use the helpers for bishop/rook/queen attacks instead.
+u32 magic_index(const Magic *magic, Bitboard occupancy);
 
-#define KINGSIDE_BITS 0xF0F0F0F0F0F0F0F0ull
-#define QUEENSIDE_BITS 0x0F0F0F0F0F0F0F0Full
-#define CENTER_FILES_BITS 0x3C3C3C3C3C3C3C3Cull
-
-extern bitboard_t LineBits[SQUARE_NB][SQUARE_NB];
-extern bitboard_t PseudoMoves[PIECETYPE_NB][SQUARE_NB];
-extern bitboard_t PawnMoves[COLOR_NB][SQUARE_NB];
-
-typedef struct magic_s
-{
-    bitboard_t mask;
-    bitboard_t magic;
-    bitboard_t *moves;
-    unsigned int shift;
-}
-magic_t;
-
-INLINED unsigned int magic_index(const magic_t *magic, bitboard_t occupied)
-{
-#ifdef USE_PEXT
-    return (_pext_u64(occupied, magic->mask));
-#else
-    return ((unsigned int)(((occupied & magic->mask) * magic->magic) >> magic->shift));
-#endif
-}
-
-extern magic_t RookMagics[SQUARE_NB];
-extern magic_t BishopMagics[SQUARE_NB];
-
+// Initializes all bitboard tables and magic bitboards
 void bitboard_init(void);
 
-INLINED bitboard_t square_bb(square_t square)
-{
-    return ((bitboard_t)1 << square);
+// Returns the bitboard representing the given square
+INLINED Bitboard square_bb(Square square) {
+    assert(square_is_valid(square));
+    return (Bitboard)1 << square;
 }
 
-INLINED bitboard_t shift_up(bitboard_t b)
-{
-    return (b << 8);
+// Returns the bitboard representing the given file
+INLINED Bitboard file_bb(File file) {
+    assert(file_is_valid(file));
+    return FILE_A_BB << file;
 }
 
-INLINED bitboard_t shift_down(bitboard_t b)
-{
-    return (b >> 8);
+// Returns the bitboard representing the given square file
+INLINED Bitboard square_file_bb(Square square) {
+    assert(square_is_valid(square));
+    return file_bb(square_file(square));
 }
 
-INLINED bitboard_t shift_left(bitboard_t b)
-{
-    return ((b & ~FILE_A_BITS) >> 1);
+// Returns the bitboard representing the given rank
+INLINED Bitboard rank_bb(File rank) {
+    assert(rank_is_valid(rank));
+    return RANK_1_BB << (8 * rank);
 }
 
-INLINED bitboard_t shift_right(bitboard_t b)
-{
-    return ((b & ~FILE_H_BITS) << 1);
+// Returns the bitboard representing the given square rank
+INLINED Bitboard square_rank_bb(Square square) {
+    assert(square_is_valid(square));
+    return rank_bb(square_rank(square));
 }
 
-INLINED bitboard_t shift_up_left(bitboard_t b)
-{
-    return ((b & ~FILE_A_BITS) << 7);
+// Sets the given square in the bitboard
+INLINED void bb_set_square(Bitboard *bb, Square square) {
+    assert(square_is_valid(square));
+    *bb |= square_bb(square);
 }
 
-INLINED bitboard_t shift_up_right(bitboard_t b)
-{
-    return ((b & ~FILE_H_BITS) << 9);
+// Clears the given square in the bitboard
+INLINED void bb_reset_square(Bitboard *bb, Square square) {
+    assert(square_is_valid(square));
+    *bb &= ~square_bb(square);
 }
 
-INLINED bitboard_t shift_down_left(bitboard_t b)
-{
-    return ((b & ~FILE_A_BITS) >> 9);
+// Flips the given square's state in the bitboard
+INLINED void bb_flip_square(Bitboard *bb, Square square) {
+    assert(square_is_valid(square));
+    *bb ^= square_bb(square);
 }
 
-INLINED bitboard_t shift_down_right(bitboard_t b)
-{
-    return ((b & ~FILE_H_BITS) >> 7);
+// Checks if the given square is set in the bitboard
+INLINED bool bb_square_is_set(Bitboard bb, Square square) {
+    return bb & square_bb(square);
 }
 
-INLINED bitboard_t relative_shift_up(bitboard_t b, color_t c)
-{
-    return ((c == WHITE) ? shift_up(b) : shift_down(b));
+// Flips the bitboard on the horizontal axis
+INLINED Bitboard bb_flip(Bitboard bb) {
+    return u64_flip_bytes(bb);
 }
 
-INLINED bitboard_t relative_shift_down(bitboard_t b, color_t c)
-{
-    return ((c == WHITE) ? shift_down(b) : shift_up(b));
+// Returns the bitboard relative to the given's color POV
+INLINED Bitboard bb_relative(Bitboard bb, Color color) {
+    assert(color_is_valid(color));
+    return (color == WHITE) ? bb : bb_flip(bb);
 }
 
-INLINED bool more_than_one(bitboard_t b)
-{
-    return (b & (b - 1));
+// Shifts the bitboard up by one rank
+INLINED Bitboard bb_shift_up(Bitboard bb) {
+    return bb << 8;
 }
 
-INLINED bitboard_t file_bb(file_t file)
-{
-    return (FILE_A_BITS << file);
+// Shifts the bitboard down by one rank
+INLINED Bitboard bb_shift_down(Bitboard bb) {
+    return bb >> 8;
 }
 
-INLINED bitboard_t sq_file_bb(square_t square)
-{
-    return (file_bb(sq_file(square)));
+// Shifts the bitboard left by one file
+INLINED Bitboard bb_shift_left(Bitboard bb) {
+    return (bb & ~FILE_A_BB) >> 1;
 }
 
-INLINED bitboard_t rank_bb(rank_t rank)
-{
-    return (RANK_1_BITS << (8 * rank));
+// Shifts the bitboard right by one file
+INLINED Bitboard bb_shift_right(Bitboard bb) {
+    return (bb & ~FILE_H_BB) << 1;
 }
 
-INLINED bitboard_t sq_rank_bb(square_t square)
-{
-    return (rank_bb(sq_rank(square)));
+// Shifts the bitboard up and left
+INLINED Bitboard bb_shift_up_left(Bitboard bb) {
+    return (bb & ~FILE_A_BB) << 7;
 }
 
-INLINED bitboard_t between_bb(square_t sq1, square_t sq2)
-{
-    return (LineBits[sq1][sq2] & ((FULL_BITS << (sq1 + (sq1 < sq2))) ^ (FULL_BITS << (sq2 + !(sq1 < sq2)))));
+// Shifts the bitboard up and right
+INLINED Bitboard bb_shift_up_right(Bitboard bb) {
+    return (bb & ~FILE_H_BB) << 9;
 }
 
-INLINED bool sq_aligned(square_t sq1, square_t sq2, square_t sq3)
-{
-    return (LineBits[sq1][sq2] & square_bb(sq3));
+// Shifts the bitboard down and left
+INLINED Bitboard bb_shift_down_left(Bitboard bb) {
+    return (bb & ~FILE_A_BB) >> 9;
 }
 
-INLINED bitboard_t bishop_moves_bb(square_t square, bitboard_t occupied)
-{
-    const magic_t *magic = &BishopMagics[square];
-
-    return (magic->moves[magic_index(magic, occupied)]);
+// Shifts the bitboard down and right
+INLINED Bitboard bb_shift_down_right(Bitboard bb) {
+    return (bb & ~FILE_H_BB) >> 7;
 }
 
-INLINED bitboard_t rook_moves_bb(square_t square, bitboard_t occupied)
-{
-    const magic_t *magic = &RookMagics[square];
-
-    return (magic->moves[magic_index(magic, occupied)]);
+// Shifts the bitboard up relative to the color's POV
+INLINED Bitboard bb_shift_up_relative(Bitboard bb, Color color) {
+    assert(color_is_valid(color));
+    return (color == WHITE) ? bb_shift_up(bb) : bb_shift_down(bb);
 }
 
-INLINED bitboard_t wpawns_attacks_bb(bitboard_t b)
-{
-    return (shift_up_left(b) | shift_up_right(b));
+// Shifts the bitboard down relative to the color's POV
+INLINED Bitboard bb_shift_down_relative(Bitboard bb, Color color) {
+    assert(color_is_valid(color));
+    return (color == WHITE) ? bb_shift_down(bb) : bb_shift_up(bb);
 }
 
-INLINED bitboard_t bpawns_attacks_bb(bitboard_t b)
-{
-    return (shift_down_left(b) | shift_down_right(b));
+// Checks if more than one bit/square is set in the bitboard
+INLINED bool bb_more_than_one(Bitboard bb) {
+    return bb & (bb - 1);
 }
 
-INLINED bitboard_t wpawns_2attacks_bb(bitboard_t b)
-{
-    return (shift_up_left(b) & shift_up_right(b));
+// Returns the horizontal/vertical/diagonal line bitboard passing through both squares
+INLINED Bitboard line_bb(Square square1, Square square2) {
+    assert(square_is_valid(square1));
+    assert(square_is_valid(square2));
+    extern Bitboard LineBB[SQUARE_NB][SQUARE_NB];
+
+    return LineBB[square1][square2];
 }
 
-INLINED bitboard_t bpawns_2attacks_bb(bitboard_t b)
-{
-    return (shift_down_left(b) & shift_down_right(b));
+// Returns the bitboard of all squares between two squares (both squares excluded)
+INLINED Bitboard between_squares_bb(Square square1, Square square2) {
+    assert(square_is_valid(square1));
+    assert(square_is_valid(square2));
+    return line_bb(square1, square2)
+        & ((ALL_BB << (square1 + (square1 < square2)))
+           ^ (ALL_BB << (square2 + !(square1 < square2))));
 }
 
-INLINED bitboard_t adjacent_files_bb(square_t s)
-{
-    bitboard_t fileBB = sq_file_bb(s);
-    return (shift_left(fileBB) | shift_right(fileBB));
+// Checks if all three squares share the same file, rank or diagonal
+INLINED bool squares_are_aligned(Square square1, Square square2, Square square3) {
+    assert(square_is_valid(square1));
+    assert(square_is_valid(square2));
+    assert(square_is_valid(square3));
+    return line_bb(square1, square2) & square_bb(square3);
 }
 
-INLINED bitboard_t forward_ranks_bb(color_t c, square_t s)
-{
-    if (c == WHITE)
-        return (~RANK_1_BITS << 8 * sq_rank(s));
-    else
-        return (~RANK_8_BITS >> 8 * (RANK_8 - sq_rank(s)));
+// Returns the bitboard of the files adjacent to the given square
+INLINED Bitboard adjacent_files_bb(Square square) {
+    assert(square_is_valid(square));
+    Bitboard bb = square_file_bb(square);
+    return bb_shift_left(bb) | bb_shift_right(bb);
 }
 
-INLINED bitboard_t forward_file_bb(color_t c, square_t s)
-{
-    return (forward_ranks_bb(c, s) & sq_file_bb(s));
+// Returns the bitboard of all squares above the given square from the color's POV
+INLINED Bitboard forward_ranks_bb(Square square, Color color) {
+    assert(square_is_valid(square));
+    assert(color_is_valid(color));
+    return (color == WHITE) ? ~RANK_1_BB << 8 * square_rank(square)
+                            : ~RANK_8_BB >> 8 * (RANK_8 - square_rank(square));
 }
 
-INLINED bitboard_t pawn_attack_span_bb(color_t c, square_t s)
-{
-    return (forward_ranks_bb(c, s) & adjacent_files_bb(s));
+// Returns the bitboard of all squares in front of the given square from the color's POV
+INLINED Bitboard forward_file_bb(Square square, Color color) {
+    assert(square_is_valid(square));
+    assert(color_is_valid(color));
+    return forward_ranks_bb(square, color) & square_file_bb(square);
 }
 
-INLINED bitboard_t passed_pawn_span_bb(color_t c, square_t s)
-{
-    return (forward_ranks_bb(c, s) & (adjacent_files_bb(s) | sq_file_bb(s)));
+// Returns the bitboard of all squares still attackable by the pawn from the given square and color
+INLINED Bitboard pawn_attack_span_bb(Square square, Color color) {
+    assert(square_is_valid(square));
+    assert(color_is_valid(color));
+    return forward_ranks_bb(square, color) & adjacent_files_bb(square);
 }
 
-INLINED int popcount(bitboard_t b)
-{
-#ifndef USE_POPCNT
-    const bitboard_t m1 = 0x5555555555555555ull;
-    const bitboard_t m2 = 0x3333333333333333ull;
-    const bitboard_t m4 = 0x0F0F0F0F0F0F0F0Full;
-    const bitboard_t hx = 0x0101010101010101ull;
+// Returns the bitboard of all squares where an opponent pawn would prevent a pawn from being
+// considered "passed"
+INLINED Bitboard passed_pawn_span_bb(Square square, Color color) {
+    assert(square_is_valid(square));
+    assert(color_is_valid(color));
+    return forward_ranks_bb(square, color) & (adjacent_files_bb(square) | square_file_bb(square));
+}
 
-    b -= (b >> 1) & m1;
-    b = (b & m2) + ((b >> 2) & m2);
-    b = (b + (b >> 4)) & m4;
-    return ((b * hx) >> 56);
+// Returns the number of bits/squares set in the bitboard
+INLINED u32 bb_popcount(Bitboard bb) {
+    return u64_count_ones(bb);
+}
 
-#elif defined(_MSC_VER) || defined (__INTEL_COMPILER)
+// Returns the first square set in the bitboard
+INLINED Square bb_first_square(Bitboard bb) {
+    assert(bb != 0);
+    return u64_first_one(bb);
+}
 
-    return ((int)_mm_popcnt_u64(b));
+// Returns the last square set in the bitboard
+INLINED Square bb_last_square(Bitboard bb) {
+    assert(bb != 0);
+    return u64_last_one(bb);
+}
 
-#else
+// Returns the first square set in the bitboard relative to the color's POV
+INLINED Square bb_first_square_relative(Bitboard bb, Color us) {
+    assert(bb != 0);
+    return us == WHITE ? bb_first_square(bb) : bb_last_square(bb);
+}
 
-    return (__builtin_popcountll(b));
+// Returns the last square set in the bitboard relative to the color's POV
+INLINED Square bb_last_square_relative(Bitboard bb, Color us) {
+    assert(bb != 0);
+    return us == WHITE ? bb_last_square(bb) : bb_first_square(bb);
+}
+
+// Removes and returns the first square set in the bitboard
+INLINED Square bb_pop_first_square(Bitboard *bb) {
+    Square square = bb_first_square(*bb);
+    *bb &= *bb - 1;
+    return square;
+}
 
 #endif
-}
-
-#if defined(__GNUC__)
-
-INLINED square_t bb_first_sq(bitboard_t b)
-{
-    return (__builtin_ctzll(b));
-}
-
-INLINED square_t bb_last_sq(bitboard_t b)
-{
-    return (SQ_H8 ^ __builtin_clzll(b));
-}
-
-#elif defined(_MSC_VER)
-
-INLINED square_t bb_first_sq(bitboard_t b)
-{
-    unsigned long index;
-    _BitScanForward64(&index, b);
-    return ((square_t)index);
-}
-
-INLINED square_t bb_last_sq(bitboard_t b)
-{
-    unsigned long index;
-    _BitScanReverse64(&index, b);
-    return ((square_t)index);
-}
-
-#else
-#error "Unsupported compiler."
-#endif
-
-INLINED square_t bb_pop_first_sq(bitboard_t *b)
-{
-    const square_t square = bb_first_sq(*b);
-    *b &= *b - 1;
-    return (square);
-}
-
-INLINED square_t bb_relative_last_sq(color_t c, bitboard_t b)
-{
-    return (c == WHITE ? bb_last_sq(b) : bb_first_sq(b));
-}
-
-INLINED void prefetch(void *ptr __attribute__((unused)))
-{
-#ifdef USE_PREFETCH
-    _mm_prefetch(ptr, _MM_HINT_T0);
-#elif defined(__GNUC__)
-    __builtin_prefetch(ptr);
-#endif
-}
-
-#endif // BITBOARD_H

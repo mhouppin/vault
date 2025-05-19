@@ -1,270 +1,368 @@
-#include <stdio.h>
-#include <string.h>
-#include "movelist.h"
-#include "uci.h"
+/*
+**    Stash, a UCI chess playing engine developed from scratch
+**    Copyright (C) 2019-2025 Morgan Houppin
+**
+**    Stash is free software: you can redistribute it and/or modify
+**    it under the terms of the GNU General Public License as published by
+**    the Free Software Foundation, either version 3 of the License, or
+**    (at your option) any later version.
+**
+**    Stash is distributed in the hope that it will be useful,
+**    but WITHOUT ANY WARRANTY; without even the implied warranty of
+**    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+**    GNU General Public License for more details.
+**
+**    You should have received a copy of the GNU General Public License
+**    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 #include "worker.h"
 
-worker_pool_t WPool;
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-INLINED int rtm_greater_than(root_move_t *right, root_move_t *left)
-{
-    if (right->score != left->score)
-        return (right->score > left->score);
-    else
-        return (right->prevScore > left->prevScore);
+#include "search.h"
+#include "wmalloc.h"
+
+void pv_line_init(PvLine *pv_line) {
+    pv_line->length = 0;
 }
 
-void sort_root_moves(root_move_t *begin, root_move_t *end)
-{
-    const int size = (int)(end - begin);
+void pv_line_init_move(PvLine *pv_line, Move move) {
+    pv_line->length = 1;
+    pv_line->moves[0] = move;
+}
 
-    for (int i = 1; i < size; ++i)
-    {
-        root_move_t tmp = begin[i];
-        int j = i - 1;
+void pv_line_update(PvLine *restrict pv_line, Move bestmove, const PvLine *restrict next) {
+    pv_line->moves[0] = bestmove;
+    pv_line->length = next->length + 1;
 
-        while (j >= 0 && rtm_greater_than(&tmp, begin + j))
-        {
-            begin[j + 1] = begin[j];
+    for (u16 i = 0; i < next->length; ++i) {
+        pv_line->moves[i + 1] = next->moves[i];
+    }
+}
+
+void root_move_init(RootMove *root_move, Move move) {
+    root_move->move = move;
+    root_move->seldepth = 0;
+    root_move->previous_score = -INF_SCORE;
+    root_move->score = -INF_SCORE;
+    pv_line_init_move(&root_move->pv, move);
+}
+
+RootMove *find_root_move(RootMove *root_moves, usize root_count, Move move) {
+    for (usize i = 0; i < root_count; ++i) {
+        if (root_moves[i].move == move) {
+            return &root_moves[i];
+        }
+    }
+
+    return NULL;
+}
+
+static i32 compare_root_moves(const RootMove *lhs, const RootMove *rhs) {
+    if (lhs->score != rhs->score) {
+        return (i32)lhs->score - (i32)rhs->score;
+    }
+
+    return (i32)lhs->previous_score - (i32)rhs->previous_score;
+}
+
+void sort_root_moves(RootMove *root_moves, usize root_count) {
+    // We perform a simple insertion sort here.
+    for (usize i = 1; i < root_count; ++i) {
+        RootMove tmp = root_moves[i];
+
+        isize j = (isize)i - 1;
+
+        while (j >= 0 && compare_root_moves(&tmp, &root_moves[j]) > 0) {
+            root_moves[j + 1] = root_moves[j];
             --j;
         }
 
-        begin[j + 1] = tmp;
+        root_moves[j + 1] = tmp;
     }
 }
 
-root_move_t *find_root_move(root_move_t *begin, root_move_t *end, move_t move)
-{
-    while (begin < end)
-    {
-        if (begin->move == move)
-            return (begin);
+void worker_init(Worker *worker, usize thread_index, struct WorkerPool *pool) {
+    worker->thread_index = thread_index;
+    worker->acc_stack = wrap_aligned_alloc(64, sizeof(AccumulatorPair) * (MAX_PLIES + 1));
+    worker->butterfly_hist = wrap_aligned_alloc(64, sizeof(ButterflyHistory));
+    worker->continuation_hist = wrap_aligned_alloc(64, sizeof(ContinuationHistory));
+    worker->counter_hist = wrap_aligned_alloc(64, sizeof(CountermoveHistory));
+    worker->capture_hist = wrap_aligned_alloc(64, sizeof(CaptureHistory));
+    worker->pawn_corrhist = wrap_aligned_alloc(64, sizeof(CorrectionHistory));
+    worker->nonpawn_corrhist = wrap_aligned_alloc(64, sizeof(CorrectionHistory) * COLOR_NB);
+    worker->root_moves = wrap_malloc(sizeof(RootMove) * MAX_MOVES);
+    worker->must_exit = false;
+    worker->is_searching = true;
+    worker->pool = pool;
 
-        ++begin;
-    }
-    return (NULL);
-}
-
-void worker_init(worker_t *worker, size_t idx)
-{
-    worker->idx = idx;
-    worker->stack = NULL;
-    worker->pawnTable = calloc(PawnTableSize, sizeof(pawn_entry_t));
-    worker->exit = false;
-    worker->searching = true;
-
-    if (worker->pawnTable == NULL)
-    {
-        perror("Unable to allocate pawn table");
-        exit(EXIT_FAILURE);
-    }
-
-    if (pthread_mutex_init(&worker->mutex, NULL)
-        || pthread_cond_init(&worker->condVar, NULL))
-    {
+    if (pthread_mutex_init(&worker->mutex, NULL) || pthread_cond_init(&worker->condvar, NULL)) {
         perror("Unable to initialize worker lock");
         exit(EXIT_FAILURE);
     }
 
-    if (pthread_create(&worker->thread, &WorkerSettings, &worker_entry, worker))
-    {
-        perror("Unable to initialize worker");
+    if (pthread_create(
+            &worker->thread,
+            &worker->pool->worker_pthread_attr,
+            worker_entry_point,
+            worker
+        )) {
+        perror("Unable to initialize worker thread");
         exit(EXIT_FAILURE);
     }
+
+    atomic_init(&worker->nodes, 0);
+    worker_init_new_game(worker);
 }
 
-void worker_destroy(worker_t *worker)
-{
-    worker->exit = true;
-    worker_start_search(worker);
+void worker_destroy(Worker *worker) {
+    pthread_mutex_lock(&worker->mutex);
+    worker->must_exit = true;
+    pthread_mutex_unlock(&worker->mutex);
+    worker_start_searching(worker);
 
-    if (pthread_join(worker->thread, NULL))
-    {
+    if (pthread_join(worker->thread, NULL)) {
         perror("Unable to stop worker");
         exit(EXIT_FAILURE);
     }
 
-    free(worker->pawnTable);
     pthread_mutex_destroy(&worker->mutex);
-    pthread_cond_destroy(&worker->condVar);
+    pthread_cond_destroy(&worker->condvar);
+    wrap_aligned_free(worker->acc_stack);
+    wrap_aligned_free(worker->butterfly_hist);
+    wrap_aligned_free(worker->continuation_hist);
+    wrap_aligned_free(worker->counter_hist);
+    wrap_aligned_free(worker->capture_hist);
+    wrap_aligned_free(worker->pawn_corrhist);
+    wrap_aligned_free(worker->nonpawn_corrhist);
+    free(worker->root_moves);
 }
 
-void worker_reset(worker_t *worker)
-{
-    memset(worker->bfHistory, 0, sizeof(butterfly_history_t));
-    memset(worker->ctHistory, 0, sizeof(continuation_history_t));
-    memset(worker->cmHistory, 0, sizeof(countermove_history_t));
-    memset(worker->capHistory, 0, sizeof(capture_history_t));
-    worker->verifPlies = 0;
+void worker_init_new_game(Worker *worker) {
+    memset(worker->butterfly_hist, 0, sizeof(ButterflyHistory));
+    memset(worker->continuation_hist, 0, sizeof(ContinuationHistory));
+    memset(worker->counter_hist, 0, sizeof(CountermoveHistory));
+    memset(worker->capture_hist, 0, sizeof(CaptureHistory));
+    memset(worker->pawn_corrhist, 0, sizeof(CorrectionHistory));
+    memset(worker->nonpawn_corrhist, 0, sizeof(CorrectionHistory) * COLOR_NB);
 }
 
-void worker_start_search(worker_t *worker)
-{
+void worker_start_searching(Worker *worker) {
     pthread_mutex_lock(&worker->mutex);
-    worker->searching = true;
-    pthread_cond_signal(&worker->condVar);
+    worker->is_searching = true;
+    pthread_cond_signal(&worker->condvar);
     pthread_mutex_unlock(&worker->mutex);
 }
 
-void worker_wait_search_end(worker_t *worker)
-{
+void worker_init_search_data(Worker *worker) {
+    const Movelist *searchmoves = &worker->pool->search_params.searchmoves;
+
+    board_clone(&worker->board, &worker->pool->root_board);
+    board_enable_worker(&worker->board);
+
+    worker->seldepth = 0;
+    worker->root_depth = 0;
+    worker->nmp_verif_plies = 0;
+    worker->root_move_count = movelist_size(searchmoves);
+
+    for (usize i = 0; i < worker->root_move_count; ++i) {
+        root_move_init(&worker->root_moves[i], searchmoves->moves[i].move);
+    }
+
+    worker->pv_line = 0;
+}
+
+void worker_wait_search_completion(Worker *worker) {
     pthread_mutex_lock(&worker->mutex);
-    while (worker->searching)
-        pthread_cond_wait(&worker->condVar, &worker->mutex);
+
+    while (worker->is_searching) {
+        pthread_cond_wait(&worker->condvar, &worker->mutex);
+    }
+
     pthread_mutex_unlock(&worker->mutex);
 }
 
-void *worker_entry(void *ptr)
-{
-    worker_t *worker = ptr;
+void *worker_entry_point(void *worker_ptr) {
+    Worker *worker = (Worker *)worker_ptr;
 
-    while (true)
-    {
+    while (true) {
+        // Set the worker status as non-searching, and notify all waiting threads of the status
+        // change.
         pthread_mutex_lock(&worker->mutex);
-        worker->searching = false;
-        pthread_cond_signal(&worker->condVar);
+        worker->is_searching = false;
+        pthread_cond_signal(&worker->condvar);
 
-        while (!worker->searching)
-            pthread_cond_wait(&worker->condVar, &worker->mutex);
+        // Wait for a signal from the UCI thread (or the main worker thread in the case of SMP) to
+        // perform a task.
+        while (!worker->is_searching) {
+            pthread_cond_wait(&worker->condvar, &worker->mutex);
+        }
 
-        if (worker->exit)
-            break ;
+        if (worker->must_exit) {
+            pthread_mutex_unlock(&worker->mutex);
+            break;
+        }
 
         pthread_mutex_unlock(&worker->mutex);
 
-        if (worker->idx)
-            worker_search(worker);
-        else
+        if (worker->thread_index == 0) {
             main_worker_search(worker);
-    }
-
-    return (NULL);
-}
-
-void wpool_init(worker_pool_t *wpool, size_t threads)
-{
-    if (wpool->size)
-    {
-        worker_wait_search_end(wpool_main_worker(wpool));
-
-        while (wpool->size)
-        {
-            --wpool->size;
-
-            worker_t *curWorker = wpool->workerList[wpool->size];
-
-            worker_destroy(curWorker);
-            free(curWorker);
-        }
-
-        free(wpool->workerList);
-    }
-
-    if (threads)
-    {
-        wpool->workerList = malloc(sizeof(worker_t *) * threads);
-
-        if (wpool->workerList == NULL)
-        {
-            perror("Unable to allocate worker pool");
-            exit(EXIT_FAILURE);
-        }
-
-        while (wpool->size < threads)
-        {
-            wpool->workerList[wpool->size] = malloc(sizeof(worker_t));
-
-            if (wpool->workerList[wpool->size] == NULL)
-            {
-                perror("Unable to allocate worker pool");
-                exit(EXIT_FAILURE);
-            }
-
-            worker_init(wpool->workerList[wpool->size], wpool->size);
-            wpool->size++;
-        }
-
-        wpool_reset(wpool);
-    }
-}
-
-void wpool_reset(worker_pool_t *wpool)
-{
-    for (size_t i = 0; i < wpool->size; ++i)
-        worker_reset(wpool->workerList[i]);
-
-    wpool->checks = 1000;
-}
-
-void wpool_start_search(worker_pool_t *wpool, const board_t *rootBoard,
-    const goparams_t *searchParams)
-{
-    worker_wait_search_end(wpool_main_worker(wpool));
-
-    wpool->stop = false;
-    wpool->ponder = searchParams->ponder;
-
-    for (size_t i = 0; i < wpool->size; ++i)
-    {
-        worker_t *curWorker = wpool->workerList[i];
-        extern Network NN;
-
-        curWorker->nodes = 0;
-        curWorker->board = *rootBoard;
-        curWorker->stack = curWorker->board.stack = dup_boardstack(rootBoard->stack);
-
-        curWorker->board.acc = malloc(sizeof(weight_t) * NN.layerSizes[1] * 2);
-
-        if (curWorker->board.acc == NULL)
-        {
-            perror("Unable to allocate board accumulator");
-            exit(EXIT_FAILURE);
-        }
-
-        memcpy(curWorker->board.acc, rootBoard->acc, sizeof(weight_t) * NN.layerSizes[1] * 2);
-
-        curWorker->board.worker = curWorker;
-        curWorker->rootCount = movelist_size(&SearchMoves);
-        curWorker->rootMoves = malloc(sizeof(root_move_t) * curWorker->rootCount);
-
-        if (curWorker->rootMoves == NULL && curWorker->rootCount != 0)
-        {
-            perror("Unable to allocate root moves");
-            exit(EXIT_FAILURE);
-        }
-
-        for (size_t k = 0; k < curWorker->rootCount; ++k)
-        {
-            root_move_t *curRootMove = &curWorker->rootMoves[k];
-
-            curRootMove->move = SearchMoves.moves[k].move;
-            curRootMove->seldepth = 0;
-            curRootMove->score = curRootMove->prevScore = -INF_SCORE;
-            curRootMove->pv[0] = curRootMove->pv[1] = NO_MOVE;
+        } else {
+            worker_search(worker);
         }
     }
 
-    worker_start_search(wpool_main_worker(wpool));
+    return NULL;
 }
 
-void wpool_start_workers(worker_pool_t *wpool)
-{
-    for (size_t i = 1; i < wpool->size; ++i)
-        worker_start_search(wpool->workerList[i]);
+void wpool_init(WorkerPool *wpool) {
+    if (pthread_attr_init(&wpool->worker_pthread_attr)
+        || pthread_attr_setstacksize(&wpool->worker_pthread_attr, (usize)4 * 1024 * 1024)) {
+        perror("Unable to initialize worker thread attributes");
+        exit(EXIT_FAILURE);
+    }
+
+    wpool->worker_count = 0;
+    wpool->worker_list = NULL;
+    tt_init(&wpool->tt);
+    tt_resize(&wpool->tt, 16, 1);
+    memset(&wpool->root_board, 0, sizeof(Board));
+    wpool->check_nodes = 0;
+    atomic_init(&wpool->ponder, false);
+    atomic_init(&wpool->stop, false);
+    wpool_resize(wpool, 1);
 }
 
-void wpool_wait_search_end(worker_pool_t *wpool)
-{
-    for (size_t i = 1; i < wpool->size; ++i)
-        worker_wait_search_end(wpool->workerList[i]);
+void wpool_resize(WorkerPool *wpool, usize worker_count) {
+    if (wpool->worker_count != 0) {
+        wpool_wait_search_completion(wpool);
+    }
+
+    if (wpool->worker_count >= worker_count) {
+        while (wpool->worker_count > worker_count) {
+            --wpool->worker_count;
+
+            Worker *cur_worker = wpool->worker_list[wpool->worker_count];
+
+            worker_destroy(cur_worker);
+            wrap_aligned_free(cur_worker);
+        }
+
+        return;
+    }
+
+    wpool->worker_list = wrap_realloc(wpool->worker_list, sizeof(Worker *) * worker_count);
+
+    while (wpool->worker_count < worker_count) {
+        // Perform an independent allocation for each worker data block.
+        // Force alignment on 64 bytes to avoid false sharing issues in search.
+        wpool->worker_list[wpool->worker_count] =
+            wrap_aligned_alloc(64, usize_next_multiple_of(sizeof(Worker), 64));
+
+        worker_init(wpool->worker_list[wpool->worker_count], wpool->worker_count, wpool);
+        ++wpool->worker_count;
+    }
+
+    wpool_init_new_game(wpool);
 }
 
-uint64_t wpool_get_total_nodes(worker_pool_t *wpool)
-{
-    uint64_t totalNodes = 0;
+void wpool_destroy(WorkerPool *wpool) {
+    wpool_wait_search_completion(wpool);
 
-    for (size_t i = 0; i < wpool->size; ++i)
-        totalNodes += wpool->workerList[i]->nodes;
+    while (wpool->worker_count) {
+        --wpool->worker_count;
 
-    return (totalNodes);
+        Worker *cur_worker = wpool->worker_list[wpool->worker_count];
+
+        worker_destroy(cur_worker);
+        wrap_aligned_free(cur_worker);
+    }
+
+    free(wpool->worker_list);
+    boardstack_destroy(wpool->root_board.stack);
+    pthread_attr_destroy(&wpool->worker_pthread_attr);
+    tt_destroy(&wpool->tt);
+}
+
+void wpool_init_new_game(WorkerPool *wpool) {
+    for (usize i = 0; i < wpool->worker_count; ++i) {
+        worker_init_new_game(wpool->worker_list[i]);
+    }
+
+    tt_init_new_game(&wpool->tt, wpool->worker_count);
+}
+
+void wpool_start_search(
+    WorkerPool *wpool,
+    const Board *root_board,
+    const SearchParams *search_params
+) {
+    wpool_wait_search_completion(wpool);
+
+    atomic_store_explicit(&wpool->stop, false, memory_order_relaxed);
+    atomic_store_explicit(&wpool->ponder, search_params->ponder, memory_order_relaxed);
+
+    // Init the time manager here to account for the potential worker wakeup/init delay.
+    timeman_init(&wpool->timeman, root_board, search_params, timepoint_now());
+
+    boardstack_destroy(wpool->root_board.stack);
+    board_clone(&wpool->root_board, root_board);
+    search_params_copy(&wpool->search_params, search_params);
+    worker_start_searching(wpool_main_worker(wpool));
+}
+
+void wpool_wait_search_completion(WorkerPool *wpool) {
+    // The main thread is the last thread to complete search, so we can just wait for it.
+    worker_wait_search_completion(wpool->worker_list[0]);
+}
+
+void wpool_init_new_search(WorkerPool *wpool) {
+    wpool->check_nodes = 1;
+    tt_new_search(&wpool->tt);
+
+    for (usize i = 0; i < wpool->worker_count; ++i) {
+        atomic_store_explicit(&wpool->worker_list[i]->nodes, 0, memory_order_relaxed);
+    }
+}
+
+void wpool_start_aux_workers(WorkerPool *wpool) {
+    for (usize i = 1; i < wpool->worker_count; ++i) {
+        worker_start_searching(wpool->worker_list[i]);
+    }
+}
+
+void wpool_wait_aux_workers(WorkerPool *wpool) {
+    for (usize i = 1; i < wpool->worker_count; ++i) {
+        worker_wait_search_completion(wpool->worker_list[i]);
+    }
+}
+
+void wpool_check_time(WorkerPool *wpool) {
+    if (--wpool->check_nodes > 0) {
+        return;
+    }
+
+    wpool->check_nodes = wpool->timeman.delay_check_nodes;
+
+    if (wpool->search_params.infinite || wpool_is_stopped(wpool)) {
+        return;
+    }
+
+    if (wpool_get_total_nodes(wpool) >= wpool->search_params.nodes
+        || timeman_must_stop_search(&wpool->timeman, wpool, timepoint_now())) {
+        wpool_stop(wpool);
+    }
+}
+
+u64 wpool_get_total_nodes(WorkerPool *wpool) {
+    u64 total = 0;
+
+    for (usize i = 0; i < wpool->worker_count; ++i) {
+        total += atomic_load_explicit(&wpool->worker_list[i]->nodes, memory_order_relaxed);
+    }
+
+    return total;
 }

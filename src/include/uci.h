@@ -1,13 +1,13 @@
 /*
-**    Vault, a UCI-compliant chess engine derivating from Stash
-**    Copyright (C) 2019-2022 Morgan Houppin
+**    Stash, a UCI chess playing engine developed from scratch
+**    Copyright (C) 2019-2025 Morgan Houppin
 **
-**    Vault is free software: you can redistribute it and/or modify
+**    Stash is free software: you can redistribute it and/or modify
 **    it under the terms of the GNU General Public License as published by
 **    the Free Software Foundation, either version 3 of the License, or
 **    (at your option) any later version.
 **
-**    Vault is distributed in the hope that it will be useful,
+**    Stash is distributed in the hope that it will be useful,
 **    but WITHOUT ANY WARRANTY; without even the implied warranty of
 **    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 **    GNU General Public License for more details.
@@ -19,66 +19,61 @@
 #ifndef UCI_H
 #define UCI_H
 
-#include <inttypes.h>
-#include <pthread.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <time.h>
+#include "board.h"
+#include "core.h"
+#include "option.h"
+#include "strmanip.h"
+#include "strview.h"
 #include "worker.h"
 
-#if (SIZE_MAX == UINT64_MAX)
-#define FMT_INFO PRIu64
-#define KEY_INFO PRIx64
-typedef uint64_t info_t;
-#define MAX_HASH 33554432
-#else
-#define FMT_INFO PRIu32
-#define KEY_INFO PRIx32
-typedef uint32_t info_t;
-#define MAX_HASH 2048
-#endif
-
-typedef struct ucioptions_s
-{
-    long threads;
-    long hash;
-    long moveOverhead;
-    long multiPv;
-    char *networkFile;
+typedef struct {
+    i64 threads;
+    i64 hash;
+    i64 move_overhead;
+    i64 multi_pv;
+    String evalfile;
     bool chess960;
     bool ponder;
-}
-ucioptions_t;
+    bool show_wdl;
+    bool normalize_score;
+} OptionValues;
 
-extern pthread_attr_t WorkerSettings;
-extern ucioptions_t Options;
-extern const char *Delimiters;
+typedef struct {
+    OptionValues option_values;
+    OptionList option_list;
+    Board root_board;
+    WorkerPool worker_pool;
+} Uci;
 
-typedef struct cmdlink_s
-{
-    const char *commandName;
-    void (*call)(const char *);
-}
-cmdlink_t;
+typedef struct {
+    StringView cmd_name;
+    void (*cmd_exec)(Uci *, StringView);
+} Command;
 
-char *get_next_token(char **str);
+void uci_init(Uci *uci);
+void uci_destroy(Uci *uci);
 
-const char *move_to_str(move_t move, bool isChess960);
-const char *score_to_str(score_t score);
-move_t str_to_move(const board_t *board, const char *str);
+// The list of supported commands by the engine
+void uci_bench(Uci *uci, StringView args);
+void uci_d(Uci *uci, StringView args);
+void uci_debug(Uci *uci, StringView args);
+void uci_genfens(Uci *uci, StringView args);
+void uci_go(Uci *uci, StringView args);
+void uci_isready(Uci *uci, StringView args);
+void uci_ponderhit(Uci *uci, StringView args);
+void uci_position(Uci *uci, StringView args);
+void uci_quit(Uci *uci, StringView args);
+void uci_setoption(Uci *uci, StringView args);
+void uci_stop(Uci *uci, StringView args);
+void uci_t(Uci *uci, StringView args);
+void uci_uci(Uci *uci, StringView args);
+void uci_ucinewgame(Uci *uci, StringView args);
 
-void uci_bench(const char *args);
-void uci_d(const char *args);
-void uci_debug(const char *args);
-void uci_go(const char *args);
-void uci_isready(const char *args);
-void uci_ponderhit(const char *args);
-void uci_position(const char *args);
-void uci_quit(const char *args);
-void uci_setoption(const char *args);
-void uci_stop(const char *args);
-void uci_uci(const char *args);
-void uci_ucinewgame(const char *args);
+// A nice API entry point to directly execute some commands, that returns true if the UCI thread
+// should keep parsing commands
+bool uci_exec_command(Uci *uci, StringView command);
+
+// Main entry point for the UCI handler
 void uci_loop(int argc, char **argv);
 
 #endif
