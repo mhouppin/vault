@@ -40,7 +40,11 @@ void searchstack_init(Searchstack *ss);
 
 void acc_init_from_board(AccumulatorPair *restrict acc_pair, const Board *restrict board);
 
-void acc_update_once(AccumulatorPair *restrict cur_acc, const AccumulatorPair *restrict prev_acc, const Boardstack *restrict stack);
+void acc_update_once(
+    AccumulatorPair *restrict cur_acc,
+    const AccumulatorPair *restrict prev_acc,
+    const Boardstack *restrict stack
+);
 
 void acc_update(Worker *worker, const Board *restrict board, Searchstack *ss);
 

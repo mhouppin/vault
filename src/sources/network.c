@@ -110,7 +110,11 @@ load_fail:
     network_init(network);
 }
 
-i16 network_evaluate(const Network *restrict network, Accumulator *restrict us, Accumulator *restrict them) {
+i16 network_evaluate(
+    const Network *restrict network,
+    Accumulator *restrict us,
+    Accumulator *restrict them
+) {
     i32 output = 0;
 
     // STM acc -> output

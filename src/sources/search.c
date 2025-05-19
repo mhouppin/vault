@@ -238,7 +238,11 @@ void acc_init_from_board(AccumulatorPair *restrict acc_pair, const Board *restri
     }
 }
 
-void acc_update_once(AccumulatorPair *restrict cur_acc, const AccumulatorPair *restrict prev_acc, const Boardstack *restrict stack) {
+void acc_update_once(
+    AccumulatorPair *restrict cur_acc,
+    const AccumulatorPair *restrict prev_acc,
+    const Boardstack *restrict stack
+) {
     extern Network GlobalNetwork;
     memcpy(cur_acc, prev_acc, sizeof(AccumulatorPair));
 

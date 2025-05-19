@@ -26,7 +26,11 @@ Score evaluate(const Board *restrict board, AccumulatorPair *restrict acc_pair);
 
 Score evaluate_noacc(const Board *board);
 
-Score nn_evaluate(const Board *restrict board, const Network *restrict network, AccumulatorPair *restrict acc_pair);
+Score nn_evaluate(
+    const Board *restrict board,
+    const Network *restrict network,
+    AccumulatorPair *restrict acc_pair
+);
 
 Score nn_evaluate_noacc(const Board *board, const Network *network);
 

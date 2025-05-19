@@ -61,12 +61,14 @@ void acc_add(Accumulator *restrict acc, usize idx, const Network *restrict netwo
 
 void acc_sub(Accumulator *restrict acc, usize idx, const Network *restrict network);
 
-INLINED void acc_pair_add(AccumulatorPair *restrict acc_pair, usize idx, const Network *restrict network) {
+INLINED void
+    acc_pair_add(AccumulatorPair *restrict acc_pair, usize idx, const Network *restrict network) {
     acc_add(&acc_pair->pov[WHITE], idx, network);
     acc_add(&acc_pair->pov[BLACK], ((idx >= 384) ? idx - 384 : idx + 384) ^ 56, network);
 }
 
-INLINED void acc_pair_sub(AccumulatorPair *restrict acc_pair, usize idx, const Network *restrict network) {
+INLINED void
+    acc_pair_sub(AccumulatorPair *restrict acc_pair, usize idx, const Network *restrict network) {
     acc_sub(&acc_pair->pov[WHITE], idx, network);
     acc_sub(&acc_pair->pov[BLACK], ((idx >= 384) ? idx - 384 : idx + 384) ^ 56, network);
 }
@@ -78,6 +80,10 @@ void network_init(Network *network);
 void network_load_from_file(Network *network, const char *filename);
 
 // Calculates the output of the network.
-i16 network_evaluate(const Network *restrict network, Accumulator *restrict us, Accumulator *restrict them);
+i16 network_evaluate(
+    const Network *restrict network,
+    Accumulator *restrict us,
+    Accumulator *restrict them
+);
 
 #endif

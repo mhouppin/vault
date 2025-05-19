@@ -139,7 +139,6 @@ Score evaluate(const Board *board, AccumulatorPair *restrict acc_pair) {
     return nn_evaluate(board, &GlobalNetwork, acc_pair);
 }
 
-
 Score nn_evaluate_noacc(const Board *board, const Network *network) {
     Accumulator white, black;
 
@@ -163,7 +162,11 @@ Score nn_evaluate_noacc(const Board *board, const Network *network) {
     }
 }
 
-Score nn_evaluate(const Board *restrict board, const Network *restrict network, AccumulatorPair *restrict acc_pair) {
+Score nn_evaluate(
+    const Board *restrict board,
+    const Network *restrict network,
+    AccumulatorPair *restrict acc_pair
+) {
     const Color us = board->side_to_move;
     const Color them = color_flip(us);
 

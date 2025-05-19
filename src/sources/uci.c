@@ -18,6 +18,8 @@
 
 #include "uci.h"
 
+#include <stdlib.h>
+
 #include "evaluate.h"
 #include "network.h"
 #include "random.h"
@@ -244,7 +246,7 @@ static u64 u64_mix(u64 seed) {
 
 static void do_genfens(u64 count, u64 seed, u8 depth) {
     Board board;
-    Boardstack *stack = wrap_malloc(sizeof(Boardstack) * (depth + 1));
+    Boardstack *stack = wrap_malloc(sizeof(Boardstack) * (depth + 2));
     Movelist list;
     u64 state = u64_mix(seed);
 
@@ -274,12 +276,10 @@ static void do_genfens(u64 count, u64 seed, u8 depth) {
 
         StringView fen = board_get_fen(&board);
 
-        printf(
-            "info string genfens %.*s\n",
-            (int)fen.size,
-            (const char *)fen.data
-        );
+        printf("info string genfens %.*s\n", (int)fen.size, (const char *)fen.data);
     }
+
+    free(stack);
 }
 
 void uci_genfens(Uci *uci __attribute__((unused)), StringView args) {
