@@ -269,7 +269,9 @@ static void do_genfens(u64 count, u64 seed, u8 depth) {
             board_do_move(&board, move, stack + d + 1);
         }
 
-        if (d < rdepth) {
+        movelist_generate_legal(&list, &board);
+
+        if (movelist_size(&list) == 0 || d < rdepth) {
             --i;
             continue;
         }
