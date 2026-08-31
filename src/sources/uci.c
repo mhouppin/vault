@@ -67,8 +67,17 @@ void on_clear_hash(__attribute__((unused)) const OptionParams *params, void *uci
 void on_evalfile_change(__attribute__((unused)) const OptionParams *params, void *uci_ptr) {
     Uci *uci = (Uci *)uci_ptr;
     String cstr_filename;
+    StringView evalfile = strview_from_string(&uci->option_values.evalfile);
 
-    string_init_from_strview(&cstr_filename, strview_from_string(&uci->option_values.evalfile));
+    if (strview_equals_strview(evalfile, strview_from_cstr("<embedded>"))) {
+        network_try_load_embed(&GlobalNetwork);
+        return;
+    } else if (strview_equals_strview(evalfile, strview_from_cstr("<empty>"))) {
+        network_init(&GlobalNetwork);
+        return;
+    }
+
+    string_init_from_strview(&cstr_filename, evalfile);
     string_push_back(&cstr_filename, '\0');
     network_load_from_file(&GlobalNetwork, (char *)cstr_filename.data);
     string_destroy(&cstr_filename);
@@ -85,7 +94,14 @@ static void uci_init_options(Uci *uci) {
         .show_wdl = false,
         .normalize_score = true,
     };
-    string_init_from_strview(&uci->option_values.evalfile, strview_from_cstr("<empty>"));
+    string_init_from_strview(
+        &uci->option_values.evalfile,
+#ifdef EVALFILE
+        strview_from_cstr("<embedded>")
+#else
+        strview_from_cstr("<empty>")
+#endif
+    );
 
     optlist_init(&uci->option_list);
     optlist_add_spin_integer(
@@ -498,7 +514,7 @@ void uci_t(Uci *uci, __attribute__((unused)) StringView args) {
 }
 
 void uci_uci(Uci *uci, __attribute__((unused)) StringView args) {
-    puts("id name Stash " UCI_VERSION);
+    puts("id name Vault " UCI_VERSION);
     puts("id author Morgan Houppin et al. (see AUTHORS file)");
     optlist_show_options(&uci->option_list);
     puts("uciok");
@@ -537,6 +553,7 @@ void uci_loop(int argc, char **argv) {
     Uci uci;
 
     uci_init(&uci);
+    network_try_load_embed(&GlobalNetwork);
 
     if (argc > 1) {
         for (int i = 1; i < argc; ++i) {

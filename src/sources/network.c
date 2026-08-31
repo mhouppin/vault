@@ -22,9 +22,16 @@
 #include <stdio.h>
 #include <string.h>
 
-// Clipped relu.
-static i32 crelu(i16 x) {
-    return i16_clamp(x, 0, QA);
+static const u8 EmbeddedNetwork[] = {
+#ifdef EVALFILE
+#embed EVALFILE
+#endif
+};
+
+// Squared clipped relu.
+static i32 screlu(i16 x) {
+    x = i16_clamp(x, 0, QA);
+    return (i32)x * (i32)x;
 }
 
 void acc_init_zero(Accumulator *acc) {
@@ -110,6 +117,16 @@ load_fail:
     network_init(network);
 }
 
+void network_try_load_embed(Network *network) {
+#ifdef EVALFILE
+    memcpy(network, EmbeddedNetwork, usize_min(sizeof(Network), sizeof(EmbeddedNetwork)));
+#else
+    (void)EmbeddedNetwork;
+    // Fallback to a zero-init network if no evalfile was included in the built binary.
+    network_init(network);
+#endif
+}
+
 i16 network_evaluate(
     const Network *restrict network,
     Accumulator *restrict us,
@@ -119,13 +136,16 @@ i16 network_evaluate(
 
     // STM acc -> output
     for (usize i = 0; i < HIDDEN_SIZE; ++i) {
-        output += crelu(us->values[i]) * (i32)network->stm_output_weights.values[i];
+        output += screlu(us->values[i]) * (i32)network->stm_output_weights.values[i];
     }
 
     // NSTM acc -> output
     for (usize i = 0; i < HIDDEN_SIZE; ++i) {
-        output += crelu(them->values[i]) * (i32)network->nstm_output_weights.values[i];
+        output += screlu(them->values[i]) * (i32)network->nstm_output_weights.values[i];
     }
+
+    // Remove double-QA quantisation.
+    output /= (i32)QA;
 
     // Add output bias.
     output += network->output_bias;

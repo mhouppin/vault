@@ -31,7 +31,7 @@ user_CFLAGS := $(CFLAGS)
 user_CPPFLAGS := $(CPPFLAGS)
 user_LDFLAGS := $(LDFLAGS)
 
-own_CFLAGS := -std=gnu11
+own_CFLAGS := -std=gnu23
 own_CPPFLAGS := -Wall -Wextra -Wcast-qual -Wshadow -Wvla -MMD -I include
 own_LDFLAGS := -lpthread -lm
 
@@ -115,6 +115,10 @@ ifeq ($(NATIVE),yes)
     own_CFLAGS += -march=native
 else
 	own_CFLAGS += $(ARCH_CFLAGS)
+endif
+
+ifneq ($(EVALFILE),)
+	own_CFLAGS += -DEVALFILE=\"$(EVALFILE)\"
 endif
 
 override CFLAGS += $(own_CFLAGS)

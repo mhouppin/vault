@@ -24,14 +24,14 @@
 
 enum {
     INPUT_SIZE = 768,
-    HIDDEN_SIZE = 64,
+    HIDDEN_SIZE = 16,
 
     QA = 255,
     QB = 64,
     SCALE = 192,
 };
 
-typedef struct __attribute__((aligned(64))) {
+typedef struct __attribute__((aligned(32))) {
     i16 values[HIDDEN_SIZE];
 } Accumulator;
 
@@ -75,6 +75,8 @@ INLINED void
 
 // Zero-initializes the network.
 void network_init(Network *network);
+
+void network_try_load_embed(Network *network);
 
 // Loads the network from the given file.
 void network_load_from_file(Network *network, const char *filename);
